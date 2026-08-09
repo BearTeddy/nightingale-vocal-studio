@@ -185,6 +185,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "time",
  "tiny_http",
  "tracing",

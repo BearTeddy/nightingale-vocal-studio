@@ -1,9 +1,10 @@
 use std::fs;
-use std::io;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::cache::vendor_dir;
@@ -31,6 +32,10 @@ const EMBED_METADATA_RULES: &[&str] = &[
     "%(release_year,release_date>%Y,upload_date>%Y|Unknown Year)s:%(meta_date)s",
     "%(album,playlist_title|)s:%(meta_album)s",
 ];
+
+const YT_DLP_RELEASE_BASE: &str =
+    "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download";
+const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YoutubeImportResult {
@@ -179,15 +184,13 @@ fn validate_youtube_url(input: &str) -> Result<(), String> {
 
 fn ensure_yt_dlp() -> Result<PathBuf, String> {
     let target = vendor_dir().join(yt_dlp_binary_name());
-    if target.is_file() && yt_dlp_is_usable(&target) {
+    let checksum_path = yt_dlp_checksum_path(&target);
+    if target.is_file()
+        && checksum_path.is_file()
+        && checksum_file_matches(&target, &checksum_path)?
+        && yt_dlp_is_usable(&target)
+    {
         return Ok(target);
-    }
-    if target.is_file() {
-        fs::remove_file(&target).map_err(|error| {
-            format!(
-                "Nightingale's yt-dlp installation is damaged and could not be replaced: {error}"
-            )
-        })?;
     }
 
     let parent = target
@@ -201,30 +204,210 @@ fn ensure_yt_dlp() -> Result<PathBuf, String> {
     })?;
 
     let temporary = target.with_extension("download");
-    let response = ureq::get(yt_dlp_download_url()?)
+    let expected = download_verified_yt_dlp(&temporary)?;
+    if let Err(error) = mark_executable(&temporary) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if !yt_dlp_is_usable(&temporary) {
+        let _ = fs::remove_file(&temporary);
+        return Err("The downloaded yt-dlp executable could not start and was removed.".into());
+    }
+    install_verified_yt_dlp(&temporary, &target, &checksum_path, &expected)?;
+
+    Ok(target)
+}
+
+fn download_verified_yt_dlp(destination: &Path) -> Result<String, String> {
+    let asset_name = yt_dlp_asset_name()?;
+    let url = yt_dlp_download_url()?;
+    let mut mismatch = None;
+
+    // The `latest` release alias can move between the checksum and binary requests.
+    // Retry once so a release published mid-download does not become a false failure.
+    for _ in 0..2 {
+        let expected = download_expected_checksum(asset_name)?;
+        let actual = match download_file_sha256(&url, destination) {
+            Ok(actual) => actual,
+            Err(error) => {
+                let _ = fs::remove_file(destination);
+                return Err(error);
+            }
+        };
+        if actual == expected {
+            return Ok(expected);
+        }
+        mismatch = Some((expected, actual));
+        let _ = fs::remove_file(destination);
+    }
+
+    let (expected, actual) = mismatch.expect("the verification loop always runs");
+    Err(format!(
+        "Downloaded yt-dlp failed its SHA-256 integrity check (expected {expected}, got {actual})"
+    ))
+}
+
+fn install_verified_yt_dlp(
+    temporary: &Path,
+    target: &Path,
+    checksum_path: &Path,
+    expected: &str,
+) -> Result<(), String> {
+    let staged_checksum = checksum_path.with_extension("sha256.download");
+    let backup = target.with_extension("previous");
+    let checksum_backup = checksum_path.with_extension("sha256.previous");
+
+    for stale in [&staged_checksum, &backup, &checksum_backup] {
+        let _ = fs::remove_file(stale);
+    }
+    if let Err(error) = fs::write(&staged_checksum, format!("{expected}\n")) {
+        let _ = fs::remove_file(temporary);
+        return Err(format!(
+            "Failed to stage yt-dlp integrity metadata at {}: {error}",
+            staged_checksum.display()
+        ));
+    }
+
+    if target.is_file() {
+        fs::rename(target, &backup).map_err(|error| {
+            let _ = fs::remove_file(temporary);
+            let _ = fs::remove_file(&staged_checksum);
+            format!("Nightingale's existing yt-dlp installation could not be replaced: {error}")
+        })?;
+    }
+    if checksum_path.is_file()
+        && let Err(error) = fs::rename(checksum_path, &checksum_backup)
+    {
+        let _ = restore_file(&backup, target);
+        let _ = fs::remove_file(temporary);
+        let _ = fs::remove_file(&staged_checksum);
+        return Err(format!(
+            "Nightingale's yt-dlp integrity metadata could not be replaced: {error}"
+        ));
+    }
+
+    let install_result =
+        fs::rename(temporary, target).and_then(|_| fs::rename(&staged_checksum, checksum_path));
+    if let Err(error) = install_result {
+        let _ = fs::remove_file(target);
+        let _ = fs::remove_file(checksum_path);
+        let _ = restore_file(&backup, target);
+        let _ = restore_file(&checksum_backup, checksum_path);
+        let _ = fs::remove_file(temporary);
+        let _ = fs::remove_file(&staged_checksum);
+        return Err(format!(
+            "Failed to install verified yt-dlp at {}: {error}",
+            target.display()
+        ));
+    }
+
+    let _ = fs::remove_file(backup);
+    let _ = fs::remove_file(checksum_backup);
+    Ok(())
+}
+
+fn restore_file(backup: &Path, target: &Path) -> std::io::Result<()> {
+    if backup.is_file() {
+        fs::rename(backup, target)?;
+    }
+    Ok(())
+}
+
+fn yt_dlp_checksum_path(binary_path: &Path) -> PathBuf {
+    binary_path.with_extension("sha256")
+}
+
+fn checksum_file_matches(binary_path: &Path, checksum_path: &Path) -> Result<bool, String> {
+    let expected = fs::read_to_string(checksum_path)
+        .map_err(|error| format!("Failed to read yt-dlp integrity metadata: {error}"))?;
+    let expected = expected.trim().to_ascii_lowercase();
+    if !is_sha256(&expected) {
+        return Ok(false);
+    }
+    Ok(sha256_file(binary_path)? == expected)
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|error| {
+        format!(
+            "Failed to open {} for verification: {error}",
+            path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Failed to verify {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn download_file_sha256(url: &str, destination: &Path) -> Result<String, String> {
+    let response = ureq::get(url)
+        .header("User-Agent", "Nightingale/1.0")
         .call()
         .map_err(|error| format!("Failed to download yt-dlp: {error}"))?;
     let mut reader = response.into_body().into_reader();
-    let mut file = fs::File::create(&temporary)
-        .map_err(|error| format!("Failed to create {}: {error}", temporary.display()))?;
-    if let Err(error) = io::copy(&mut reader, &mut file) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!("Failed while downloading yt-dlp: {error}"));
+    let mut file = fs::File::create(destination)
+        .map_err(|error| format!("Failed to create {}: {error}", destination.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("Failed while downloading yt-dlp: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        file.write_all(&buffer[..read])
+            .map_err(|error| format!("Failed while saving yt-dlp: {error}"))?;
+        hasher.update(&buffer[..read]);
     }
-    drop(file);
+    file.sync_all()
+        .map_err(|error| format!("Failed to flush yt-dlp to disk: {error}"))?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
 
-    mark_executable(&temporary)?;
-    fs::rename(&temporary, &target).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        format!("Failed to install yt-dlp at {}: {error}", target.display())
-    })?;
-
-    if !yt_dlp_is_usable(&target) {
-        let _ = fs::remove_file(&target);
-        return Err("The downloaded yt-dlp executable could not start and was removed.".into());
+fn download_expected_checksum(asset_name: &str) -> Result<String, String> {
+    let response = ureq::get(&format!("{YT_DLP_RELEASE_BASE}/SHA2-256SUMS"))
+        .header("User-Agent", "Nightingale/1.0")
+        .call()
+        .map_err(|error| format!("Failed to download yt-dlp checksums: {error}"))?;
+    let mut reader = response
+        .into_body()
+        .into_reader()
+        .take(MAX_CHECKSUM_BYTES + 1);
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Failed to read yt-dlp checksums: {error}"))?;
+    if bytes.len() as u64 > MAX_CHECKSUM_BYTES {
+        return Err("The yt-dlp checksum file was unexpectedly large".into());
     }
+    let checksums = String::from_utf8(bytes)
+        .map_err(|_| "The yt-dlp checksum file was not valid UTF-8".to_string())?;
+    parse_expected_checksum(&checksums, asset_name)
+        .ok_or_else(|| format!("The yt-dlp checksum file did not contain {asset_name}"))
+}
 
-    Ok(target)
+fn parse_expected_checksum(checksums: &str, asset_name: &str) -> Option<String> {
+    checksums.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let digest = fields.next()?;
+        let filename = fields.next()?.trim_start_matches('*');
+        (filename == asset_name && fields.next().is_none() && is_sha256(digest))
+            .then(|| digest.to_ascii_lowercase())
+    })
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn yt_dlp_is_usable(path: &Path) -> bool {
@@ -242,25 +425,23 @@ fn yt_dlp_binary_name() -> &'static str {
     }
 }
 
-fn yt_dlp_download_url() -> Result<&'static str, String> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => Ok(
-            "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe",
-        ),
-        ("windows", "aarch64") => Ok(
-            "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_arm64.exe",
-        ),
-        ("macos", _) => Ok(
-            "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_macos",
-        ),
-        ("linux", "x86_64") => Ok(
-            "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux",
-        ),
-        ("linux", "aarch64") => Ok(
-            "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux_aarch64",
-        ),
+fn yt_dlp_asset_name_for(os: &str, arch: &str) -> Result<&'static str, String> {
+    match (os, arch) {
+        ("windows", "x86_64") => Ok("yt-dlp.exe"),
+        ("windows", "aarch64") => Ok("yt-dlp_arm64.exe"),
+        ("macos", _) => Ok("yt-dlp_macos"),
+        ("linux", "x86_64") => Ok("yt-dlp_linux"),
+        ("linux", "aarch64") => Ok("yt-dlp_linux_aarch64"),
         (os, arch) => Err(format!("yt-dlp is not available for {os}/{arch}.")),
     }
+}
+
+fn yt_dlp_asset_name() -> Result<&'static str, String> {
+    yt_dlp_asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn yt_dlp_download_url() -> Result<String, String> {
+    Ok(format!("{YT_DLP_RELEASE_BASE}/{}", yt_dlp_asset_name()?))
 }
 
 fn read_downloaded_paths(path: &Path) -> Vec<PathBuf> {
@@ -328,7 +509,11 @@ fn mark_executable(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EMBED_METADATA_RULES, validate_youtube_url};
+    use super::{
+        EMBED_METADATA_RULES, checksum_file_matches, download_verified_yt_dlp,
+        install_verified_yt_dlp, parse_expected_checksum, sha256_file, validate_youtube_url,
+        yt_dlp_asset_name_for,
+    };
 
     #[test]
     fn accepts_video_and_playlist_urls() {
@@ -354,5 +539,107 @@ mod tests {
                 "%(album,playlist_title|)s:%(meta_album)s",
             ]
         );
+    }
+
+    #[test]
+    fn parses_only_the_requested_official_checksum_entry() {
+        let checksums = concat!(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  yt-dlp\n",
+            "BBF2DEADBEEF0000000000000000000000000000000000000000000000000000 *yt-dlp.exe\n",
+        );
+        assert_eq!(
+            parse_expected_checksum(checksums, "yt-dlp.exe").as_deref(),
+            Some("bbf2deadbeef0000000000000000000000000000000000000000000000000000")
+        );
+        assert_eq!(parse_expected_checksum(checksums, "missing"), None);
+        assert_eq!(
+            parse_expected_checksum("not-a-digest  yt-dlp.exe", "yt-dlp.exe"),
+            None
+        );
+    }
+
+    #[test]
+    fn selects_the_packaged_asset_for_each_supported_platform() {
+        assert_eq!(
+            yt_dlp_asset_name_for("windows", "x86_64").unwrap(),
+            "yt-dlp.exe"
+        );
+        assert_eq!(
+            yt_dlp_asset_name_for("windows", "aarch64").unwrap(),
+            "yt-dlp_arm64.exe"
+        );
+        assert_eq!(
+            yt_dlp_asset_name_for("macos", "aarch64").unwrap(),
+            "yt-dlp_macos"
+        );
+        assert_eq!(
+            yt_dlp_asset_name_for("linux", "x86_64").unwrap(),
+            "yt-dlp_linux"
+        );
+        assert_eq!(
+            yt_dlp_asset_name_for("linux", "aarch64").unwrap(),
+            "yt-dlp_linux_aarch64"
+        );
+        assert!(yt_dlp_asset_name_for("freebsd", "x86_64").is_err());
+    }
+
+    #[test]
+    fn verifies_cached_binaries_against_their_saved_digest() {
+        let root = std::env::temp_dir().join(format!(
+            "nightingale-ytdlp-integrity-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.join("yt-dlp.exe");
+        let checksum = root.join("yt-dlp.sha256");
+        std::fs::write(&binary, b"nightingale").unwrap();
+        let digest = sha256_file(&binary).unwrap();
+        std::fs::write(&checksum, format!("{digest}\n")).unwrap();
+
+        assert!(checksum_file_matches(&binary, &checksum).unwrap());
+        std::fs::write(&binary, b"changed").unwrap();
+        assert!(!checksum_file_matches(&binary, &checksum).unwrap());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replaces_a_cached_binary_and_its_digest_as_one_install() {
+        let root = std::env::temp_dir().join(format!(
+            "nightingale-ytdlp-install-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("yt-dlp.exe");
+        let checksum = root.join("yt-dlp.sha256");
+        let temporary = root.join("yt-dlp.download");
+        std::fs::write(&target, b"old binary").unwrap();
+        std::fs::write(&checksum, "old digest\n").unwrap();
+        std::fs::write(&temporary, b"verified binary").unwrap();
+        let digest = sha256_file(&temporary).unwrap();
+
+        install_verified_yt_dlp(&temporary, &target, &checksum, &digest).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"verified binary");
+        assert_eq!(
+            std::fs::read_to_string(&checksum).unwrap(),
+            format!("{digest}\n")
+        );
+        assert!(!root.join("yt-dlp.previous").exists());
+        assert!(!root.join("yt-dlp.sha256.previous").exists());
+        assert!(!temporary.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "downloads the current official yt-dlp nightly binary"]
+    fn verifies_the_current_official_binary_over_the_network() {
+        let destination = std::env::temp_dir().join(format!(
+            "nightingale-ytdlp-network-{}",
+            rand::random::<u64>()
+        ));
+        let expected = download_verified_yt_dlp(&destination).unwrap();
+        assert_eq!(sha256_file(&destination).unwrap(), expected);
+        std::fs::remove_file(destination).unwrap();
     }
 }
