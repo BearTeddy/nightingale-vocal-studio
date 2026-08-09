@@ -62,6 +62,7 @@ import {
   type ExerciseResult,
 } from "@/lib/vocal-exercise";
 import {
+  adaptiveCheckupBaseMidi,
   analyzeVocalCheckup,
   canCompleteVocalCheckup,
   CHECKUP_DURATION_SECONDS,
@@ -495,6 +496,7 @@ export function VocalStudioPage() {
   const checkupStarted = useRef(0);
   const checkupContext = useRef<AudioContext | null>(null);
   const checkupFinishing = useRef(false);
+  const checkupCuesScheduled = useRef(false);
   const [history, setHistory] = useState<PracticeSession[]>([]);
   const recordingPreview = useRecordingPreview();
   const [historyTakes, setHistoryTakes] = useState<Record<string, RecordingTake>>({});
@@ -541,13 +543,15 @@ export function VocalStudioPage() {
     if (!voiceProfile) return 60;
     return Math.round((voiceProfile.lowMidi + voiceProfile.highMidi) / 2) - 3;
   }, [voiceProfile]);
+  const [checkupBaseMidi, setCheckupBaseMidi] = useState(baseMidi);
+  const checkupBaseMidiRef = useRef(baseMidi);
   const recordingsDirectory = useMemo(
     () => recordingsDirectoryFromDataPath(config?.data_path),
     [config?.data_path],
   );
   const checkupStage = useMemo(
-    () => checkupStageAt(checkupElapsed, baseMidi),
-    [baseMidi, checkupElapsed],
+    () => checkupStageAt(checkupElapsed, checkupRunning ? checkupBaseMidi : baseMidi),
+    [baseMidi, checkupBaseMidi, checkupElapsed, checkupRunning],
   );
   const selectedPitchPlan = useMemo(
     () =>
@@ -656,7 +660,8 @@ export function VocalStudioPage() {
       toast.info("Checkup cancelled before all measurement stages were complete.");
       return;
     }
-    const next = analyzeVocalCheckup(checkupFrames.current, baseMidi);
+    const cueBaseMidi = checkupBaseMidiRef.current;
+    const next = analyzeVocalCheckup(checkupFrames.current, cueBaseMidi);
     if (!next) {
       toast.error("Not enough steady voice was detected. Try again closer to the microphone.");
       return;
@@ -674,7 +679,7 @@ export function VocalStudioPage() {
       kind: "voice-checkup",
       started_at: now - durationSeconds,
       ended_at: now,
-      performance_json: JSON.stringify({ ...completed, score, durationSeconds }),
+      performance_json: JSON.stringify({ ...completed, score, durationSeconds, cueBaseMidi }),
       recording_take_id: null,
       transport_segments: [],
     };
@@ -685,20 +690,48 @@ export function VocalStudioPage() {
       .catch((error) =>
         toast.error(`Checkup history: ${error instanceof Error ? error.message : String(error)}`),
       );
-  }, [activeProfile, baseMidi]);
+  }, [activeProfile]);
 
   useEffect(() => {
     if (!checkupRunning) return;
     setCheckupSeconds(CHECKUP_DURATION_SECONDS);
     const timer = window.setInterval(() => {
       const elapsed = Math.max(0, (performance.now() - checkupStarted.current) / 1000);
+      if (!checkupCuesScheduled.current && elapsed >= 10) {
+        const measuredRange = checkupFrames.current
+          .filter(
+            ({ elapsed_sec, frame }) =>
+              elapsed_sec >= 3 &&
+              elapsed_sec < 10 &&
+              frame.voiced &&
+              frame.midi != null &&
+              frame.clarity >= 0.35,
+          )
+          .map(({ frame }) => frame.midi as number);
+        const cueBaseMidi = adaptiveCheckupBaseMidi(measuredRange, baseMidi);
+        checkupBaseMidiRef.current = cueBaseMidi;
+        setCheckupBaseMidi(cueBaseMidi);
+        const context = checkupContext.current;
+        if (context && context.state !== "closed") {
+          const timelineTime = (seconds: number) =>
+            context.currentTime + Math.max(0.05, seconds - elapsed);
+          [0, 4, 7].forEach((offset, index) =>
+            scheduleTone(context, cueBaseMidi + offset, timelineTime(11 + index * 2), 0.65),
+          );
+          scheduleTone(context, cueBaseMidi, timelineTime(17), 0.75);
+          for (let index = 0; index < 8; index += 1) {
+            scheduleTone(context, cueBaseMidi, timelineTime(23.25 + index * 0.75), 0.12, 0.2);
+          }
+        }
+        checkupCuesScheduled.current = true;
+      }
       const remaining = Math.max(0, CHECKUP_DURATION_SECONDS - Math.floor(elapsed));
       setCheckupElapsed(elapsed);
       setCheckupSeconds(remaining);
       if (remaining === 0) finishCheckup();
     }, 200);
     return () => window.clearInterval(timer);
-  }, [checkupRunning, finishCheckup]);
+  }, [baseMidi, checkupRunning, finishCheckup]);
 
   useEffect(() => {
     if (!profilesLoaded) return;
@@ -763,19 +796,14 @@ export function VocalStudioPage() {
     if (prior && prior.state !== "closed") void prior.close().catch(() => {});
     checkupFrames.current = [];
     checkupFinishing.current = false;
+    checkupCuesScheduled.current = false;
+    checkupBaseMidiRef.current = baseMidi;
+    setCheckupBaseMidi(baseMidi);
     checkupStarted.current = performance.now();
     setCheckupElapsed(0);
     setCheckupSeconds(CHECKUP_DURATION_SECONDS);
     const context = new AudioContext();
     checkupContext.current = context;
-    const start = context.currentTime;
-    [0, 4, 7].forEach((offset, index) =>
-      scheduleTone(context, baseMidi + offset, start + 11 + index * 2, 0.65),
-    );
-    scheduleTone(context, baseMidi, start + 17, 0.75);
-    for (let index = 0; index < 8; index += 1) {
-      scheduleTone(context, baseMidi, start + 23.25 + index * 0.75, 0.12, 0.2);
-    }
     setCheckupRunning(true);
   };
 
@@ -785,6 +813,7 @@ export function VocalStudioPage() {
     setCheckupElapsed(0);
     setCheckupSeconds(CHECKUP_DURATION_SECONDS);
     checkupFrames.current = [];
+    checkupCuesScheduled.current = false;
     const context = checkupContext.current;
     checkupContext.current = null;
     if (context && context.state !== "closed") void context.close().catch(() => {});

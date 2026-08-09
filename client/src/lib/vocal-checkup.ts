@@ -89,6 +89,26 @@ function quantile(values: number[], amount: number): number {
   return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * amount))];
 }
 
+export function adaptiveCheckupBaseMidi(
+  rangeMidi: readonly number[],
+  fallbackMidi: number,
+): number {
+  const usable = rangeMidi.filter((midi) => Number.isFinite(midi));
+  if (usable.length < 8) return Math.round(fallbackMidi);
+
+  const low = quantile(usable, 0.1);
+  const high = quantile(usable, 0.9);
+  const preferred = Math.round(quantile(usable, 0.5) - 3);
+  const lowestBase = Math.ceil(low);
+  const highestBase = Math.floor(high - 7);
+  if (lowestBase <= highestBase) {
+    return Math.max(lowestBase, Math.min(highestBase, preferred));
+  }
+
+  // A narrow glide cannot contain the complete fifth; balance both edges.
+  return Math.round((low + high - 7) / 2);
+}
+
 function isEchoResponse(elapsedSec: number): boolean {
   return ECHO_CUE_STARTS.some(
     (start) =>

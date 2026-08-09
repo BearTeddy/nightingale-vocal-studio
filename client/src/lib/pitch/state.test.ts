@@ -76,12 +76,13 @@ describe("strict pitch scoring", () => {
     expect(freqToSemitone(followed!)).toBeGreaterThan(80.5);
   });
 
-  it("bridges two missing input frames and then clears the visual pitch", () => {
+  it("bridges brief detector dropouts and then clears the visual pitch", () => {
     const tracker = new VisualPitchTracker();
     const detected = tracker.update(440);
 
-    expect(tracker.update(null)).toBe(detected);
-    expect(tracker.update(null)).toBe(detected);
+    for (let frame = 0; frame < 5; frame += 1) {
+      expect(tracker.update(null)).toBe(detected);
+    }
     expect(tracker.update(null)).toBeNull();
   });
 

@@ -5,6 +5,8 @@ import {
   VOCAL_SCALE_LOW_MIDI,
   vocalRangePlacement,
 } from "./voice-range";
+import { MAX_PITCH_HZ, MIN_PITCH_HZ } from "./pitch/constants";
+import { midiToFreq } from "./pitch/state";
 
 describe("voice range scale", () => {
   it("includes the common low through high ensemble references", () => {
@@ -27,5 +29,10 @@ describe("voice range scale", () => {
   it("places and clamps a measured range on the shared scale", () => {
     expect(vocalRangePlacement(48, 72)).toEqual({ leftPercent: 25, widthPercent: 50 });
     expect(vocalRangePlacement(20, 96)).toEqual({ leftPercent: 0, widthPercent: 100 });
+  });
+
+  it("keeps the complete displayed scale inside the live detector range", () => {
+    expect(midiToFreq(VOCAL_SCALE_LOW_MIDI)).toBeGreaterThanOrEqual(MIN_PITCH_HZ);
+    expect(midiToFreq(VOCAL_SCALE_HIGH_MIDI)).toBeLessThanOrEqual(MAX_PITCH_HZ);
   });
 });

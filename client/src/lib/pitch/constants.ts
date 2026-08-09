@@ -1,7 +1,8 @@
 export const PITCH_WINDOW_SAMPLES = 2048;
 
-export const MIN_PITCH_HZ = 80;
-export const MAX_PITCH_HZ = 1000;
+// Covers the complete C2-C6 Vocal Studio scale with detector headroom.
+export const MIN_PITCH_HZ = 55;
+export const MAX_PITCH_HZ = 1200;
 
 export const PITCH_CLARITY_THRESHOLD = 0.4;
 

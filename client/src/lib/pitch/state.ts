@@ -95,6 +95,8 @@ function median(values: readonly number[]): number {
   return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
+const VISUAL_PITCH_DROPOUT_FRAMES = 5;
+
 /**
  * A causal, display-only pitch tracker. Raw PitchFrame values still feed scoring
  * and saved takes; this tracker only makes the live guide easier to steer.
@@ -107,7 +109,7 @@ export class VisualPitchTracker {
   update(userPitchHz: number | null): number | null {
     if (userPitchHz == null || !Number.isFinite(userPitchHz) || userPitchHz <= 0) {
       this.missingFrames += 1;
-      if (this.missingFrames <= 2) return this.currentHz();
+      if (this.missingFrames <= VISUAL_PITCH_DROPOUT_FRAMES) return this.currentHz();
       this.displayedMidi = null;
       this.midiHistory.length = 0;
       return null;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PitchFrame } from "@/types/PitchFrame";
 import {
+  adaptiveCheckupBaseMidi,
   analyzeVocalCheckup,
   canCompleteVocalCheckup,
   checkupSessionDuration,
@@ -58,6 +59,12 @@ describe("vocal checkup", () => {
     expect(checkupTargetAt(13.5, 60)).toBe(64);
     expect(checkupTargetAt(15.5, 60)).toBe(67);
     expect(checkupStageAt(25, 60).label).toBe("Rhythm");
+  });
+
+  it("places guided cues inside the range measured by the opening glide", () => {
+    expect(adaptiveCheckupBaseMidi([43, 46, 49, 52, 55, 58, 61, 64], 60)).toBe(49);
+    expect(adaptiveCheckupBaseMidi([60, 63, 66, 69, 72, 75, 78, 81], 60)).toBe(66);
+    expect(adaptiveCheckupBaseMidi([55, 56, 57], 60)).toBe(60);
   });
 
   it("produces range, quality, pitch, sustain, and rhythm metrics", () => {

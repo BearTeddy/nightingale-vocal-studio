@@ -7,8 +7,8 @@ use ts_rs::TS;
 pub const PITCH_WINDOW_SAMPLES: usize = 2_048;
 const PITCH_PADDING_SAMPLES: usize = PITCH_WINDOW_SAMPLES / 2;
 const PITCH_HOP_SAMPLES: usize = 1_536;
-const MIN_PITCH_HZ: f32 = 80.0;
-const MAX_PITCH_HZ: f32 = 1_000.0;
+const MIN_PITCH_HZ: f32 = 55.0;
+const MAX_PITCH_HZ: f32 = 1_200.0;
 const RMS_GATE: f32 = 0.003;
 const POWER_THRESHOLD: f32 = RMS_GATE * RMS_GATE * PITCH_WINDOW_SAMPLES as f32;
 const CLARITY_THRESHOLD: f32 = 0.65;
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn detects_synthetic_voice_range_tones_in_the_correct_octave() {
-        for expected in [110.0, 220.0, 440.0, 880.0] {
+        for expected in [65.406, 110.0, 220.0, 440.0, 880.0, 1_046.502] {
             let frame = last_frame(&sine_wave(expected, 0.2, PITCH_WINDOW_SAMPLES * 2));
             let detected = frame.hz.expect("tone should be voiced");
             assert!(
