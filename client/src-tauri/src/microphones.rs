@@ -910,9 +910,14 @@ pub fn stop_mic_capture() {
 #[cfg(test)]
 mod tests {
     use super::{
-        recording_completion_error, sync_channel, write_recording_stream, RECORDING_QUEUE_CHUNKS,
+        drain_chunk, find_device, recording_completion_error, sync_channel, try_build_stream,
+        write_recording_stream, AUDIO_QUEUE_CAP, PCM_QUEUE_CAP, RECORDING_QUEUE_CHUNKS,
     };
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use crate::native_pitch::NativePitchTracker;
+    use cpal::traits::DeviceTrait;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn finalized_capture_failures_keep_an_actionable_reason() {
@@ -969,5 +974,101 @@ mod tests {
         assert_eq!(reader.duration() as usize, TOTAL_SAMPLES);
         println!("30-minute vocal master written in {:?}", started.elapsed());
         std::fs::remove_file(final_path).unwrap();
+    }
+
+    #[test]
+    #[ignore = "captures real microphone input for a headless hardware diagnostic"]
+    fn probes_live_microphone_pitch_input() {
+        let preferred = std::env::var("NIGHTINGALE_TEST_MIC").ok();
+        let seconds = std::env::var("NIGHTINGALE_MIC_PROBE_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(6)
+            .clamp(2, 30);
+        let (device, name) = find_device(preferred.as_deref()).expect("microphone should exist");
+        let default_config = device
+            .default_input_config()
+            .expect("microphone should expose a default input format");
+        let sample_rate = default_config.sample_rate().0;
+        let config = cpal::StreamConfig {
+            channels: default_config.channels(),
+            sample_rate: default_config.sample_rate(),
+            buffer_size: cpal::BufferSize::Default,
+        };
+        let pcm = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(PCM_QUEUE_CAP)));
+        let monitor = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(AUDIO_QUEUE_CAP)));
+        let stream = try_build_stream(
+            &device,
+            &config,
+            default_config.sample_format(),
+            Arc::clone(&pcm),
+            monitor,
+        )
+        .expect("microphone stream should open");
+
+        let deadline = Instant::now() + Duration::from_secs(seconds);
+        let mut tracker = NativePitchTracker::default();
+        let mut sample_index = 0u64;
+        let mut pitch_frames = 0usize;
+        let mut voiced_frames = 0usize;
+        let mut clarity_sum = 0.0f32;
+        let mut max_rms = 0.0f32;
+        let mut midi_frames = Vec::new();
+
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(4));
+            while let Some(samples) = drain_chunk(&pcm) {
+                sample_index += samples.len() as u64;
+                if let Some(frame) = tracker.push_samples(&samples, sample_rate, sample_index) {
+                    pitch_frames += 1;
+                    max_rms = max_rms.max(frame.rms);
+                    if let Some(midi) = frame.midi {
+                        voiced_frames += 1;
+                        clarity_sum += frame.clarity;
+                        midi_frames.push(Some(midi));
+                    } else {
+                        midi_frames.push(None);
+                    }
+                }
+            }
+        }
+        drop(stream);
+
+        let voiced_percent = voiced_frames as f32 / pitch_frames.max(1) as f32 * 100.0;
+        let mean_clarity = clarity_sum / voiced_frames.max(1) as f32;
+        let mut step_cents = midi_frames
+            .windows(2)
+            .filter_map(|window| Some((window[1]? - window[0]?).abs() * 100.0))
+            .collect::<Vec<_>>();
+        step_cents.sort_by(f32::total_cmp);
+        let p90_step_cents = step_cents
+            .get(((step_cents.len().saturating_sub(1)) as f32 * 0.9).round() as usize)
+            .copied()
+            .unwrap_or(0.0);
+        let large_steps = step_cents.iter().filter(|step| **step >= 600.0).count();
+        let isolated_large_steps = midi_frames
+            .windows(3)
+            .filter(|window| match (window[0], window[1], window[2]) {
+                (Some(previous), Some(current), Some(next)) => {
+                    (current - previous).abs() >= 6.0 && (next - previous).abs() <= 1.5
+                }
+                _ => false,
+            })
+            .count();
+        println!(
+            "mic_probe device={name:?} sample_rate={sample_rate} samples={sample_index} \
+             pitch_frames={pitch_frames} voiced_frames={voiced_frames} \
+             voiced_percent={voiced_percent:.1} mean_clarity={mean_clarity:.3} \
+             max_rms={max_rms:.4} p90_step_cents={p90_step_cents:.0} \
+             large_steps={large_steps} isolated_large_steps={isolated_large_steps}"
+        );
+
+        let minimum_samples = sample_rate as u64 * seconds * 3 / 4;
+        assert!(
+            sample_index >= minimum_samples,
+            "microphone delivered only {sample_index} of at least {minimum_samples} expected samples"
+        );
+        assert!(pitch_frames >= (seconds as usize * 20));
+        assert!(max_rms > 0.0001, "microphone input was effectively silent");
     }
 }
