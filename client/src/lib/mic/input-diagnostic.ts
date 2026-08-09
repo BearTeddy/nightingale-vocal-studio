@@ -48,6 +48,7 @@ export function diagnoseMicInput(
   }
   if (status.rms < MIC_RMS_GATE) return result("silent", "SILENT", "No usable signal detected");
   if (status.rms < 0.012) return result("weak", "WEAK", "Move closer or raise input gain");
-  if (status.send_errors > 0) return result("error", "IPC ERRORS", "Audio frames were lost");
+  if (status.send_errors > 0 || status.pitch_errors > 0)
+    return result("error", "IPC ERRORS", "Audio or pitch frames were lost");
   return result("live", "LIVE", "Audio samples are arriving");
 }

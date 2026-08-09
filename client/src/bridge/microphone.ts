@@ -2,10 +2,12 @@ import type { MicCaptureOptions } from "@/types/MicCaptureOptions";
 import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { MicrophoneInfo } from "@/types/MicrophoneInfo";
 import type { MicSampleFrame } from "@/types/MicSampleFrame";
+import type { NativePitchFrame } from "@/types/NativePitchFrame";
 
-export type { MicCaptureOptions, MicSampleFrame };
+export type { MicCaptureOptions, MicSampleFrame, NativePitchFrame };
 
 export type MicSamplesCallback = (frame: MicSampleFrame) => void;
+export type NativePitchCallback = (frame: NativePitchFrame) => void;
 export type StopListening = () => void;
 
 export interface MicrophoneAdapter {
@@ -13,11 +15,13 @@ export interface MicrophoneAdapter {
   startCapture(preferred: string | null, options: MicCaptureOptions): Promise<string>;
   stopCapture(): Promise<void>;
   onSamples(cb: MicSamplesCallback): Promise<StopListening>;
+  onPitch?(cb: NativePitchCallback): Promise<StopListening>;
   getCaptureStatus?(): Promise<MicCaptureStatus>;
   getLatestSamples?(): Promise<MicSampleFrame | null>;
 }
 
 const subscribers = new Set<MicSamplesCallback>();
+const pitchSubscribers = new Set<NativePitchCallback>();
 
 /**
  * Backend implementations push every PCM frame through this single dispatch
@@ -38,6 +42,23 @@ export const subscribeMicSamples = (cb: MicSamplesCallback): StopListening => {
   subscribers.add(cb);
   return () => {
     subscribers.delete(cb);
+  };
+};
+
+export const dispatchNativePitchFrame = (frame: NativePitchFrame): void => {
+  for (const cb of pitchSubscribers) {
+    try {
+      cb(frame);
+    } catch {
+      // Subscribers must not break the dispatch loop.
+    }
+  }
+};
+
+export const subscribeNativePitch = (cb: NativePitchCallback): StopListening => {
+  pitchSubscribers.add(cb);
+  return () => {
+    pitchSubscribers.delete(cb);
   };
 };
 

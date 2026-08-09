@@ -4,6 +4,7 @@ mod config;
 mod logging;
 mod lyrics;
 mod microphones;
+pub mod native_pitch;
 mod playback;
 mod practice;
 mod profile;

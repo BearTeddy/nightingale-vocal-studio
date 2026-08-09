@@ -35,12 +35,15 @@ export function useMicPitch(enabled: boolean) {
     ringRef.current = new SampleRing(RING_CAPACITY);
   }
 
-  useMicSamples((frame) => {
-    sampleRateRef.current = frame.sample_rate;
-    sampleIndexRef.current = frame.sample_index + frame.samples.length;
-    lastStreamFrameAtRef.current = performance.now();
-    ringRef.current?.push(frame.samples);
-  }, enabled);
+  useMicSamples(
+    (frame) => {
+      sampleRateRef.current = frame.sample_rate;
+      sampleIndexRef.current = frame.sample_index + frame.samples.length;
+      lastStreamFrameAtRef.current = performance.now();
+      ringRef.current?.push(frame.samples);
+    },
+    enabled && defaultAdapter.onPitch == null,
+  );
 
   useEffect(() => {
     if (!enabled) {
@@ -57,6 +60,32 @@ export function useMicPitch(enabled: boolean) {
     }
 
     setActive(true);
+    if (defaultAdapter.onPitch) {
+      let cancelled = false;
+      let stopListening: (() => void) | null = null;
+      defaultAdapter
+        .onPitch((frame) => {
+          if (cancelled) return;
+          setLatestPitch(frame.hz);
+          setLatestFrame(frame);
+        })
+        .then((stop) => {
+          if (cancelled) stop();
+          else stopListening = stop;
+        })
+        .catch(() => {
+          // Capture command failures are surfaced by useMicCapture.
+        });
+
+      return () => {
+        cancelled = true;
+        stopListening?.();
+        setLatestPitch(null);
+        setLatestFrame(null);
+        setActive(false);
+      };
+    }
+
     const detector = createMicPitchDetector();
     const window = new Float32Array(PITCH_WINDOW_SAMPLES);
 

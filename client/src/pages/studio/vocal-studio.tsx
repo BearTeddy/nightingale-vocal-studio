@@ -426,7 +426,7 @@ function SignalStrip({
           </p>
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-2 border-t border-border text-xs sm:grid-cols-5">
+      <div className="mt-3 grid grid-cols-2 border-t border-border text-xs sm:grid-cols-6">
         {[
           ["STREAM", diagnostic.label, diagnostic.detail],
           [
@@ -442,6 +442,13 @@ function SignalStrip({
             "Current input energy",
           ],
           ["PEAK", `${diagnostic.peakPercent}%`, "Current input peak"],
+          [
+            "PITCH",
+            captureStatus
+              ? `${captureStatus.pitch_frames} / ${captureStatus.pitch_errors}`
+              : "-- / --",
+            "Native analysis frames / errors",
+          ],
           [
             "IPC",
             captureStatus

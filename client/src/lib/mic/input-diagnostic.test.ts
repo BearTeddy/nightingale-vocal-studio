@@ -10,6 +10,8 @@ const status = (overrides: Partial<MicCaptureStatus> = {}): MicCaptureStatus => 
   input_samples: 48_000,
   sent_frames: 93,
   send_errors: 0,
+  pitch_frames: 30,
+  pitch_errors: 0,
   rms: 0.05,
   peak: 0.2,
   ...overrides,
@@ -29,6 +31,7 @@ describe("microphone input diagnostic", () => {
     expect(diagnoseMicInput(status(), true).state).toBe("live");
     expect(diagnoseMicInput(status({ peak: 0.99 }), true).state).toBe("clipping");
     expect(diagnoseMicInput(status({ send_errors: 1 }), true).state).toBe("error");
+    expect(diagnoseMicInput(status({ pitch_errors: 1 }), true).state).toBe("error");
   });
 
   it("formats amplitude as decibels without inventing a floor", () => {

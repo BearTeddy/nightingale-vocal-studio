@@ -15,7 +15,7 @@ not be attributed to the upstream maintainers.
 
 - YouTube video and playlist import with highest-quality downloads and Unicode-safe metadata.
 - Versioned melody maps from UltraStar data, TorchCREPE, or pYIN, plus a correction editor.
-- Octave-aware live pitch tracking, JOYSOUND-style guidance, detailed category scoring, and phrase replay.
+- Compiled Rust McLeod live-pitch analysis on desktop, with octave-aware scoring, JOYSOUND-style guidance, and phrase replay.
 - A local Vocal Studio with voice checkups, range visualization, adaptive exercises, ear training, and history.
 - Mono 24-bit vocal masters, synchronized replay mixes, crash recovery, and M4A/MP4 export.
 - Windows data-folder and Desktop-shortcut automation, including Japanese path and filename support.

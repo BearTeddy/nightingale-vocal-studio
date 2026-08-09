@@ -1,3 +1,4 @@
+use crate::native_pitch::{NativePitchFrame, NativePitchTracker};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -23,6 +24,8 @@ static MIC_SAMPLE_RATE: AtomicU32 = AtomicU32::new(0);
 static MIC_INPUT_SAMPLES: AtomicU64 = AtomicU64::new(0);
 static MIC_SENT_FRAMES: AtomicU64 = AtomicU64::new(0);
 static MIC_SEND_ERRORS: AtomicU64 = AtomicU64::new(0);
+static MIC_PITCH_FRAMES: AtomicU64 = AtomicU64::new(0);
+static MIC_PITCH_ERRORS: AtomicU64 = AtomicU64::new(0);
 static MIC_LATEST_RMS_BITS: AtomicU32 = AtomicU32::new(0);
 static MIC_LATEST_PEAK_BITS: AtomicU32 = AtomicU32::new(0);
 static RECORDER_PAUSED: AtomicBool = AtomicBool::new(false);
@@ -66,8 +69,8 @@ pub struct MicrophoneInfo {
     pub name: String,
 }
 
-/// Mono PCM frame streamed from Rust to JS. JS owns all DSP (pitch, reactive
-/// analysis) and runs it on a sliding window built from these frames.
+/// Mono PCM frame streamed from Rust to JS for recording diagnostics, latency
+/// calibration, and reactive visuals. Desktop pitch detection runs natively.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct MicSampleFrame {
@@ -89,6 +92,10 @@ pub struct MicCaptureStatus {
     pub sent_frames: u64,
     #[ts(type = "number")]
     pub send_errors: u64,
+    #[ts(type = "number")]
+    pub pitch_frames: u64,
+    #[ts(type = "number")]
+    pub pitch_errors: u64,
     pub rms: f32,
     pub peak: f32,
 }
@@ -152,6 +159,8 @@ pub fn get_mic_capture_status() -> MicCaptureStatus {
         input_samples: MIC_INPUT_SAMPLES.load(Ordering::Relaxed),
         sent_frames: MIC_SENT_FRAMES.load(Ordering::Relaxed),
         send_errors: MIC_SEND_ERRORS.load(Ordering::Relaxed),
+        pitch_frames: MIC_PITCH_FRAMES.load(Ordering::Relaxed),
+        pitch_errors: MIC_PITCH_ERRORS.load(Ordering::Relaxed),
         rms: f32::from_bits(MIC_LATEST_RMS_BITS.load(Ordering::Relaxed)),
         peak: f32::from_bits(MIC_LATEST_PEAK_BITS.load(Ordering::Relaxed)),
     }
@@ -259,6 +268,8 @@ static MIC_SHUTDOWN: once_cell::sync::Lazy<Arc<AtomicBool>> =
 static MONITOR_ENABLED: AtomicBool = AtomicBool::new(false);
 static MIC_CHANNEL: once_cell::sync::Lazy<Arc<Mutex<Option<Channel<MicSampleFrame>>>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
+static MIC_PITCH_CHANNEL: once_cell::sync::Lazy<Arc<Mutex<Option<Channel<NativePitchFrame>>>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
 static MIC_THREAD: once_cell::sync::Lazy<Mutex<Option<JoinHandle<()>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
 /// Serializes start/stop so concurrent IPC dispatches can't interleave a
@@ -281,6 +292,9 @@ fn stop_internal() {
     if let Ok(mut slot) = MIC_CHANNEL.lock() {
         *slot = None;
     }
+    if let Ok(mut slot) = MIC_PITCH_CHANNEL.lock() {
+        *slot = None;
+    }
     if let Some(handle) = take_mic_thread() {
         let _ = handle.join();
     }
@@ -289,6 +303,8 @@ fn stop_internal() {
     MIC_INPUT_SAMPLES.store(0, Ordering::SeqCst);
     MIC_SENT_FRAMES.store(0, Ordering::SeqCst);
     MIC_SEND_ERRORS.store(0, Ordering::SeqCst);
+    MIC_PITCH_FRAMES.store(0, Ordering::SeqCst);
+    MIC_PITCH_ERRORS.store(0, Ordering::SeqCst);
     MIC_LATEST_RMS_BITS.store(0, Ordering::SeqCst);
     MIC_LATEST_PEAK_BITS.store(0, Ordering::SeqCst);
     PRE_ROLL
@@ -488,6 +504,7 @@ pub fn start_mic_capture(
     preferred: Option<String>,
     options: Option<MicCaptureOptions>,
     on_samples: Channel<MicSampleFrame>,
+    on_pitch: Channel<NativePitchFrame>,
 ) -> Result<String, String> {
     let _guard = MIC_OP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -513,6 +530,9 @@ pub fn start_mic_capture(
 
     if let Ok(mut slot) = MIC_CHANNEL.lock() {
         *slot = Some(on_samples);
+    }
+    if let Ok(mut slot) = MIC_PITCH_CHANNEL.lock() {
+        *slot = Some(on_pitch);
     }
 
     MIC_SHUTDOWN.store(false, Ordering::SeqCst);
@@ -822,6 +842,7 @@ fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
 
     let sleep_dur = std::time::Duration::from_millis(4);
     let mut sample_index = 0u64;
+    let mut pitch_tracker = NativePitchTracker::default();
 
     loop {
         std::thread::sleep(sleep_dur);
@@ -840,14 +861,32 @@ fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
             let rms = (sum / samples.len().max(1) as f32).sqrt();
             MIC_LATEST_RMS_BITS.store(rms.to_bits(), Ordering::Relaxed);
             MIC_LATEST_PEAK_BITS.store(peak.to_bits(), Ordering::Relaxed);
+            let end_sample_index = sample_index.saturating_add(samples.len() as u64);
+            let pitch_frame = pitch_tracker.push_samples(&samples, sr, end_sample_index);
+            sample_index = end_sample_index;
+
+            if let Some(frame) = pitch_frame {
+                let pitch_channel = MIC_PITCH_CHANNEL.lock().ok().and_then(|slot| slot.clone());
+                if let Some(channel) = pitch_channel {
+                    match channel.send(frame) {
+                        Ok(()) => {
+                            MIC_PITCH_FRAMES.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(error) => {
+                            MIC_PITCH_ERRORS.fetch_add(1, Ordering::Relaxed);
+                            warn!("[mic] pitch channel send failed: {error}");
+                        }
+                    }
+                }
+            }
+
             let channel = MIC_CHANNEL.lock().ok().and_then(|s| s.clone());
             if let Some(channel) = channel {
                 let frame = MicSampleFrame {
                     sample_rate: sr,
-                    sample_index,
+                    sample_index: end_sample_index.saturating_sub(samples.len() as u64),
                     samples,
                 };
-                sample_index = sample_index.saturating_add(frame.samples.len() as u64);
                 match channel.send(frame) {
                     Ok(()) => {
                         MIC_SENT_FRAMES.fetch_add(1, Ordering::Relaxed);

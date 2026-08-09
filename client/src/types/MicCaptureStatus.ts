@@ -7,6 +7,8 @@ export type MicCaptureStatus = {
   input_samples: number;
   sent_frames: number;
   send_errors: number;
+  pitch_frames: number;
+  pitch_errors: number;
   rms: number;
   peak: number;
 };

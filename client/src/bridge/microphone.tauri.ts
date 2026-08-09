@@ -2,8 +2,15 @@ import type { MicCaptureOptions } from "@/types/MicCaptureOptions";
 import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { MicrophoneInfo } from "@/types/MicrophoneInfo";
 import type { MicSampleFrame } from "@/types/MicSampleFrame";
+import type { NativePitchFrame } from "@/types/NativePitchFrame";
 import { Channel, invoke } from "./runtime";
-import { dispatchMicFrame, type MicrophoneAdapter, subscribeMicSamples } from "./microphone";
+import {
+  dispatchMicFrame,
+  dispatchNativePitchFrame,
+  type MicrophoneAdapter,
+  subscribeMicSamples,
+  subscribeNativePitch,
+} from "./microphone";
 
 /**
  * Serializes start/stop so React's stop-then-start on song change can't race
@@ -11,7 +18,7 @@ import { dispatchMicFrame, type MicrophoneAdapter, subscribeMicSamples } from ".
  * be free to reorder).
  */
 let opChain: Promise<unknown> = Promise.resolve();
-let activeChannel: object | null = null;
+let activeChannels: { samples: object; pitch: object } | null = null;
 
 const enqueue = <T>(op: () => Promise<T>): Promise<T> => {
   const next = opChain.catch(() => undefined).then(op);
@@ -29,17 +36,21 @@ const startCapture = (preferred: string | null, options: MicCaptureOptions): Pro
      * callback id. Reusing the cached Channel would hand Rust a dead id and
      * spam "Couldn't find callback id ..." for every frame.
      */
-    const channel = new Channel<MicSampleFrame>();
-    channel.onmessage = dispatchMicFrame;
-    activeChannel = channel;
+    const sampleChannel = new Channel<MicSampleFrame>();
+    const pitchChannel = new Channel<NativePitchFrame>();
+    sampleChannel.onmessage = dispatchMicFrame;
+    pitchChannel.onmessage = dispatchNativePitchFrame;
+    const channels = { samples: sampleChannel, pitch: pitchChannel };
+    activeChannels = channels;
     try {
       return await invoke<string>("start_mic_capture", {
         preferred,
         options,
-        onSamples: channel,
+        onSamples: sampleChannel,
+        onPitch: pitchChannel,
       });
     } catch (error) {
-      if (activeChannel === channel) activeChannel = null;
+      if (activeChannels === channels) activeChannels = null;
       throw error;
     }
   });
@@ -47,7 +58,7 @@ const startCapture = (preferred: string | null, options: MicCaptureOptions): Pro
 const stopCapture = (): Promise<void> =>
   enqueue(async () => {
     await invoke("stop_mic_capture");
-    activeChannel = null;
+    activeChannels = null;
   });
 
 const getCaptureStatus = (): Promise<MicCaptureStatus> =>
@@ -61,6 +72,7 @@ export const tauriMicrophoneAdapter: MicrophoneAdapter = {
   startCapture,
   stopCapture,
   onSamples: async (cb) => subscribeMicSamples(cb),
+  onPitch: async (cb) => subscribeNativePitch(cb),
   getCaptureStatus,
   getLatestSamples,
 };
