@@ -96,15 +96,20 @@ function median(values: readonly number[]): number {
 }
 
 const VISUAL_PITCH_DROPOUT_FRAMES = 5;
+const VISUAL_LARGE_JUMP_SEMITONES = 4;
+const VISUAL_JUMP_MATCH_SEMITONES = 1.5;
+const VISUAL_JUMP_CONFIRMATION_FRAMES = 3;
 
 /**
- * A causal, display-only pitch tracker. Raw PitchFrame values still feed scoring
- * and saved takes; this tracker only makes the live guide easier to steer.
+ * A causal, display-only pitch tracker. Accepted PitchFrame values still feed
+ * scoring and saved takes; this adds extra visual damping for easier steering.
  */
 export class VisualPitchTracker {
   private readonly midiHistory: number[] = [];
   private displayedMidi: number | null = null;
   private missingFrames = 0;
+  private pendingJumpMidi: number | null = null;
+  private pendingJumpFrames = 0;
 
   update(userPitchHz: number | null): number | null {
     if (userPitchHz == null || !Number.isFinite(userPitchHz) || userPitchHz <= 0) {
@@ -112,29 +117,59 @@ export class VisualPitchTracker {
       if (this.missingFrames <= VISUAL_PITCH_DROPOUT_FRAMES) return this.currentHz();
       this.displayedMidi = null;
       this.midiHistory.length = 0;
+      this.clearPendingJump();
       return null;
     }
 
+    const missingFrames = this.missingFrames;
     this.missingFrames = 0;
     const currentMidi = freqToSemitone(userPitchHz);
+
+    if (
+      this.displayedMidi != null &&
+      Math.abs(currentMidi - this.displayedMidi) >= VISUAL_LARGE_JUMP_SEMITONES
+    ) {
+      // Native tracking emits two gaps before confirming a real large leap.
+      // Snap to that confirmed pitch instead of adding another visual delay.
+      if (missingFrames >= 2) {
+        this.displayedMidi = currentMidi;
+        this.midiHistory.splice(0, this.midiHistory.length, currentMidi);
+        this.clearPendingJump();
+        return this.currentHz();
+      }
+
+      if (
+        this.pendingJumpMidi != null &&
+        Math.abs(currentMidi - this.pendingJumpMidi) <= VISUAL_JUMP_MATCH_SEMITONES
+      ) {
+        this.pendingJumpFrames += 1;
+        this.pendingJumpMidi +=
+          (currentMidi - this.pendingJumpMidi) / this.pendingJumpFrames;
+      } else {
+        this.pendingJumpMidi = currentMidi;
+        this.pendingJumpFrames = 1;
+      }
+
+      if (this.pendingJumpFrames < VISUAL_JUMP_CONFIRMATION_FRAMES) return this.currentHz();
+
+      this.displayedMidi = this.pendingJumpMidi;
+      this.midiHistory.splice(0, this.midiHistory.length, this.displayedMidi);
+      this.clearPendingJump();
+      return this.currentHz();
+    }
+
+    this.clearPendingJump();
     this.midiHistory.push(currentMidi);
     if (this.midiHistory.length > 3) this.midiHistory.shift();
 
-    let candidate = median(this.midiHistory);
-    if (
-      this.displayedMidi != null &&
-      this.midiHistory.length === 2 &&
-      Math.abs(currentMidi - this.displayedMidi) >= 6
-    ) {
-      candidate = this.displayedMidi;
-    }
+    const candidate = median(this.midiHistory);
 
     if (this.displayedMidi == null) {
       this.displayedMidi = candidate;
     } else {
       const distance = Math.abs(candidate - this.displayedMidi);
       if (distance > 0.03) {
-        const retained = distance <= 0.35 ? 0.72 : distance <= 1.5 ? 0.42 : 0.08;
+        const retained = distance <= 0.35 ? 0.82 : distance <= 1.5 ? 0.68 : 0.5;
         this.displayedMidi = this.displayedMidi * retained + candidate * (1 - retained);
       }
     }
@@ -149,6 +184,12 @@ export class VisualPitchTracker {
     this.midiHistory.length = 0;
     this.displayedMidi = null;
     this.missingFrames = 0;
+    this.clearPendingJump();
+  }
+
+  private clearPendingJump(): void {
+    this.pendingJumpMidi = null;
+    this.pendingJumpFrames = 0;
   }
 }
 

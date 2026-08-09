@@ -73,7 +73,17 @@ describe("strict pitch scoring", () => {
     tracker.update(midiToFreq(81));
     tracker.update(midiToFreq(81));
     const followed = tracker.update(midiToFreq(81));
-    expect(freqToSemitone(followed!)).toBeGreaterThan(80.5);
+    expect(freqToSemitone(followed!)).toBeGreaterThan(80.9);
+  });
+
+  it("snaps to a large leap already confirmed by the native tracker", () => {
+    const tracker = new VisualPitchTracker();
+    tracker.update(midiToFreq(69));
+    tracker.update(null);
+    tracker.update(null);
+    const followed = tracker.update(midiToFreq(81));
+
+    expect(freqToSemitone(followed!)).toBeGreaterThan(80.9);
   });
 
   it("bridges brief detector dropouts and then clears the visual pitch", () => {

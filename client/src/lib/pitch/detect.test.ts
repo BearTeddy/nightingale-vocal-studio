@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PITCH_WINDOW_SAMPLES } from "./constants";
+import { MIC_PITCH_CLARITY_THRESHOLD, PITCH_WINDOW_SAMPLES } from "./constants";
 import { createMicPitchDetector, detectMicPitchDetails } from "./detect";
 
 const SAMPLE_RATE = 48_000;
@@ -16,5 +16,15 @@ describe("browser microphone pitch fallback", () => {
     const frame = detectMicPitchDetails(createMicPitchDetector(), sineWave(expected), SAMPLE_RATE);
     expect(frame.hz).not.toBeNull();
     expect(Math.abs((frame.hz as number) - expected)).toBeLessThan(1);
+  });
+
+  it("uses the same explicit clarity floor as native microphone tracking", () => {
+    const detector = createMicPitchDetector();
+    detector.findPitch = () => [440, MIC_PITCH_CLARITY_THRESHOLD - 0.01];
+
+    const frame = detectMicPitchDetails(detector, sineWave(440), SAMPLE_RATE);
+
+    expect(frame.hz).toBeNull();
+    expect(frame.clarity).toBeCloseTo(MIC_PITCH_CLARITY_THRESHOLD - 0.01);
   });
 });

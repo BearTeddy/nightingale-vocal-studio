@@ -26,7 +26,7 @@ export function createPitchDetector(): PitchDetector<Float32Array> {
 
 export function createMicPitchDetector(): PitchDetector<Float32Array> {
   const d = PitchDetector.forFloat32Array(PITCH_WINDOW_SAMPLES);
-  d.clarityThreshold = 0.65;
+  d.clarityThreshold = MIC_PITCH_CLARITY_THRESHOLD;
   return d;
 }
 
