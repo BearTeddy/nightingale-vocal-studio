@@ -9,6 +9,7 @@ import { createPitchDetector, detectPitchFromSamplesRef } from "@/lib/pitch/dete
 import {
   displayedCentsOffset,
   findTargetNoteAt,
+  isPitchTimeDiscontinuity,
   MelodyPerformanceScoring,
   midiToFreq,
   PitchSeries,
@@ -57,6 +58,8 @@ export function usePitchScoring(
     discontinuities: [],
   });
   const denseLastPushRef = useRef(0);
+  const lastProcessedSampleIndexRef = useRef<number | null>(null);
+  const lastTransportTimeRef = useRef<number | null>(null);
   const [series, setSeries] = useState<PitchSeries>({
     refPitches: [],
     userPitches: [],
@@ -87,6 +90,8 @@ export function usePitchScoring(
       discontinuities: [],
     };
     denseLastPushRef.current = 0;
+    lastProcessedSampleIndexRef.current = null;
+    lastTransportTimeRef.current = null;
     referencePitchRef.current = {
       buffer: null,
       time: Number.NEGATIVE_INFINITY,
@@ -116,63 +121,77 @@ export function usePitchScoring(
       const mp = frame?.hz ?? null;
       const scoringTime = Math.max(0, t - latencyRef.current);
       const melodyScoring = melodyScoringRef.current;
+      const previousTransportTime = lastTransportTimeRef.current;
+      const transportDiscontinuity =
+        previousTransportTime != null &&
+        isPitchTimeDiscontinuity(previousTransportTime, scoringTime);
+      lastTransportTimeRef.current = scoringTime;
+      const shouldProcessFrame =
+        frame == null ||
+        frame.sample_index !== lastProcessedSampleIndexRef.current ||
+        transportDiscontinuity;
+      if (shouldProcessFrame) {
+        lastProcessedSampleIndexRef.current = frame?.sample_index ?? null;
+      }
 
       if (melodyScoring && melodyRef.current) {
         const note = findTargetNoteAt(melodyRef.current.notes, scoringTime);
         const refHz = note ? midiToFreq(note.midi + note.cents / 100) : null;
         const sim = refHz != null && mp != null ? pitchSimilarity(refHz, mp) : 0;
-        const referenceBuffer = getReferenceBuffer();
-        let referenceMidi: number | undefined;
-        if (note && frame?.voiced) {
-          const cached = referencePitchRef.current;
-          const needsDetection =
-            cached.buffer !== referenceBuffer ||
-            scoringTime < cached.time ||
-            scoringTime - cached.time >= 0.02;
-          if (needsDetection) {
-            const sampled = sampleVocalsWindow(
-              referenceBuffer,
-              scoringTime,
-              referenceWindowRef.current,
-              0,
-            );
-            const detectedHz = sampled
-              ? detectPitchFromSamplesRef(
-                  referenceDetectorRef.current,
-                  referenceWindowRef.current,
-                  referenceBuffer?.sampleRate ?? 0,
-                )
-              : null;
-            cached.buffer = referenceBuffer;
-            cached.time = scoringTime;
-            cached.midi = detectedHz == null ? null : 12 * Math.log2(detectedHz / 440) + 69;
-          }
-          if (cached.midi != null) {
-            const targetMidi = note.midi + note.cents / 100;
-            const octaveAligned = cached.midi + 12 * Math.round((targetMidi - cached.midi) / 12);
-            if (Math.abs(octaveAligned - targetMidi) <= 3.5) referenceMidi = octaveAligned;
-          }
-        }
-        const scoringFrame = frame
-          ? {
-              ...frame,
-              reference_rms: note
-                ? (sampleAudioBufferRms(referenceBuffer, scoringTime) ?? undefined)
-                : undefined,
-              reference_midi: referenceMidi,
-            }
-          : null;
         bufferRef.current.tryPush(refHz, mp, sim, t, frame?.sample_index);
-        pushPitchSeriesFrame(
-          denseSeriesRef.current,
-          denseLastPushRef,
-          refHz,
-          mp,
-          sim,
-          t,
-          scoringFrame,
-        );
-        melodyScoring.accumulate(scoringTime, scoringFrame);
+        if (shouldProcessFrame) {
+          const referenceBuffer = getReferenceBuffer();
+          let referenceMidi: number | undefined;
+          if (note && frame?.voiced) {
+            const cached = referencePitchRef.current;
+            const needsDetection =
+              cached.buffer !== referenceBuffer ||
+              scoringTime < cached.time ||
+              scoringTime - cached.time >= 0.02;
+            if (needsDetection) {
+              const sampled = sampleVocalsWindow(
+                referenceBuffer,
+                scoringTime,
+                referenceWindowRef.current,
+                0,
+              );
+              const detectedHz = sampled
+                ? detectPitchFromSamplesRef(
+                    referenceDetectorRef.current,
+                    referenceWindowRef.current,
+                    referenceBuffer?.sampleRate ?? 0,
+                  )
+                : null;
+              cached.buffer = referenceBuffer;
+              cached.time = scoringTime;
+              cached.midi = detectedHz == null ? null : 12 * Math.log2(detectedHz / 440) + 69;
+            }
+            if (cached.midi != null) {
+              const targetMidi = note.midi + note.cents / 100;
+              const octaveAligned = cached.midi + 12 * Math.round((targetMidi - cached.midi) / 12);
+              if (Math.abs(octaveAligned - targetMidi) <= 3.5) referenceMidi = octaveAligned;
+            }
+          }
+          const scoringFrame = frame
+            ? {
+                ...frame,
+                reference_rms: note
+                  ? (sampleAudioBufferRms(referenceBuffer, scoringTime) ?? undefined)
+                  : undefined,
+                reference_midi: referenceMidi,
+              }
+            : null;
+          pushPitchSeriesFrame(
+            denseSeriesRef.current,
+            denseLastPushRef,
+            refHz,
+            mp,
+            sim,
+            t,
+            scoringFrame,
+          );
+          melodyScoring.accumulate(scoringTime, scoringFrame);
+        }
         const displaySeries = bufferRef.current.snapshot();
         const latestDisplayPitch =
           displaySeries.userPitches[displaySeries.userPitches.length - 1] ?? null;
@@ -189,7 +208,9 @@ export function usePitchScoring(
       // Keep the live trace in free-sing mode, but do not infer a score from
       // the separated vocal stem. Scores require eligible MelodyMap targets.
       bufferRef.current.tryPush(null, mp, 0, t, frame?.sample_index);
-      pushPitchSeriesFrame(denseSeriesRef.current, denseLastPushRef, null, mp, 0, t, frame);
+      if (shouldProcessFrame) {
+        pushPitchSeriesFrame(denseSeriesRef.current, denseLastPushRef, null, mp, 0, t, frame);
+      }
       setSeries(bufferRef.current.snapshot());
       setScore(0);
     };

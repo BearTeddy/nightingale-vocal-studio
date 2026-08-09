@@ -58,6 +58,10 @@ export function pushPitchSeriesFrame(
   if (discontinuity) {
     appendPitchSeriesValue(series, null, null, 0, time, null, true);
   }
+  const previousFrame = series.frames?.[series.frames.length - 1] ?? null;
+  if (!discontinuity && frame != null && previousFrame?.sample_index === frame.sample_index) {
+    return;
+  }
   if (!discontinuity && previousTime != null && time - lastPushRef.current < minimumIntervalSec)
     return;
   lastPushRef.current = time;

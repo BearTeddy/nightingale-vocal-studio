@@ -25,6 +25,7 @@ export function useMicPitch(enabled: boolean) {
   const ringRef = useRef<SampleRing | null>(null);
   const sampleRateRef = useRef(0);
   const sampleIndexRef = useRef(0);
+  const lastDetectedEndIndexRef = useRef(0);
   const lastStreamFrameAtRef = useRef(0);
   const lastFallbackEndIndexRef = useRef(0);
   const fallbackBusyRef = useRef(false);
@@ -47,6 +48,7 @@ export function useMicPitch(enabled: boolean) {
       setActive(false);
       ringRef.current?.reset();
       sampleRateRef.current = 0;
+      lastDetectedEndIndexRef.current = 0;
       lastStreamFrameAtRef.current = 0;
       lastFallbackEndIndexRef.current = 0;
       fallbackBusyRef.current = false;
@@ -58,6 +60,7 @@ export function useMicPitch(enabled: boolean) {
     const window = new Float32Array(PITCH_WINDOW_SAMPLES);
 
     const updatePitch = (samples: Float32Array, sr: number, sampleIndex: number) => {
+      lastDetectedEndIndexRef.current = sampleIndex;
       const details = detectMicPitchDetails(detector, samples, sr);
       setLatestPitch(details.hz);
       setLatestFrame({
@@ -100,13 +103,15 @@ export function useMicPitch(enabled: boolean) {
     const tick = () => {
       const ring = ringRef.current;
       const sr = sampleRateRef.current;
+      const sampleIndex = sampleIndexRef.current;
       if (
         ring &&
         sr > 0 &&
+        sampleIndex !== lastDetectedEndIndexRef.current &&
         performance.now() - lastStreamFrameAtRef.current < 250 &&
         ring.readMostRecent(window)
       ) {
-        updatePitch(window, sr, sampleIndexRef.current);
+        updatePitch(window, sr, sampleIndex);
         return;
       }
       void pollFallback();

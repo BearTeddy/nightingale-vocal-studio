@@ -237,6 +237,46 @@ describe("strict pitch scoring", () => {
     expect(series.discontinuities).toEqual([false, true, false]);
   });
 
+  it("does not persist the same microphone window twice during normal playback", () => {
+    const series = {
+      refPitches: [] as Array<number | null>,
+      userPitches: [] as Array<number | null>,
+      similarities: [] as number[],
+      timestamps: [] as number[],
+      frames: [] as Array<PitchFrame | null>,
+      discontinuities: [] as boolean[],
+    };
+    const lastPush = { current: 0 };
+    const repeatedFrame = { ...frame(69), sample_index: 100 };
+
+    pushPitchSeriesFrame(series, lastPush, 440, 440, 1, 0.1, repeatedFrame, 0);
+    pushPitchSeriesFrame(series, lastPush, 440, 440, 1, 0.2, repeatedFrame, 0);
+
+    expect(series.timestamps).toEqual([0.1]);
+    expect(series.frames).toHaveLength(1);
+  });
+
+  it("persists the same microphone window again after a seek", () => {
+    const series = {
+      refPitches: [] as Array<number | null>,
+      userPitches: [] as Array<number | null>,
+      similarities: [] as number[],
+      timestamps: [] as number[],
+      frames: [] as Array<PitchFrame | null>,
+      discontinuities: [] as boolean[],
+    };
+    const lastPush = { current: 0 };
+    const repeatedFrame = { ...frame(69), sample_index: 100 };
+
+    pushPitchSeriesFrame(series, lastPush, 440, 440, 1, 10, repeatedFrame, 0);
+    pushPitchSeriesFrame(series, lastPush, 440, 440, 1, 5, repeatedFrame, 0);
+
+    expect(series.userPitches).toEqual([440, null, 440]);
+    expect(series.frames.map((item) => item?.sample_index ?? null)).toEqual([100, null, 100]);
+    expect(series.timestamps).toEqual([10, 5, 5]);
+    expect(series.discontinuities).toEqual([false, true, false]);
+  });
+
   it("does not count persisted seek markers as silent singing", () => {
     const result = scorePitchSeries(melody(), {
       refPitches: [440, null, 440],
