@@ -12,7 +12,15 @@ import { usePlaybackTransportActions } from "@/contexts/playback/playback-transp
 import { usePlaybackTranscript } from "@/hooks/playback/use-playback-transcript";
 import type { Segment } from "@/types/Transcript";
 import { INTRO_SKIP_LEAD_SEC } from "@/utils/playback/transcript-segments";
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 export interface PlaybackTranscriptState {
   segments: Segment[];
@@ -21,12 +29,15 @@ export interface PlaybackTranscriptState {
   lastSegmentEnd: number;
   introSkipLeadSec: number;
   skipOutroPending: boolean;
+  phraseLoopEnabled: boolean;
+  loopedPhrase: Segment | null;
 }
 
 export interface PlaybackTranscriptActions {
   handleSkipIntro: () => void;
   handleSkipOutro: () => void;
   clearSkipOutroPending: () => void;
+  togglePhraseLoop: () => void;
 }
 
 const TranscriptStateContext = createContext<PlaybackTranscriptState | null>(null);
@@ -41,9 +52,10 @@ export function PlaybackTranscriptProvider({
   fileHash,
   children,
 }: PlaybackTranscriptProviderProps) {
-  const { seek, pauseAudio } = usePlaybackTransportActions();
+  const { seek, finishAudio, subscribe, getCurrentTime } = usePlaybackTransportActions();
   const { segments, transcriptSource } = usePlaybackTranscript(fileHash);
   const [skipOutroPending, setSkipOutroPending] = useState(false);
+  const [loopedPhrase, setLoopedPhrase] = useState<Segment | null>(null);
 
   const firstSegmentStart = segments.length > 0 ? segments[0].start : 0;
   const lastSegmentEnd = segments.length > 0 ? segments[segments.length - 1].end : 0;
@@ -59,13 +71,35 @@ export function PlaybackTranscriptProvider({
   const handleSkipOutro = useCallback(() => {
     // Pause the audio engine WITHOUT raising the user-facing `paused` flag,
     // otherwise PauseOverlay would flash open when the result dialog closes.
-    pauseAudio();
+    finishAudio();
     setSkipOutroPending(true);
-  }, [pauseAudio]);
+  }, [finishAudio]);
 
   const clearSkipOutroPending = useCallback(() => {
     setSkipOutroPending(false);
   }, []);
+
+  const togglePhraseLoop = useCallback(() => {
+    if (loopedPhrase) {
+      setLoopedPhrase(null);
+      return;
+    }
+    const time = getCurrentTime();
+    const phrase =
+      segments.find((segment) => time >= segment.start && time <= segment.end) ??
+      segments.find((segment) => segment.start > time) ??
+      null;
+    setLoopedPhrase(phrase);
+  }, [getCurrentTime, loopedPhrase, segments]);
+
+  useEffect(() => {
+    if (!loopedPhrase) return;
+    return subscribe((time) => {
+      if (time >= loopedPhrase.end + 0.12) {
+        seek(Math.max(0, loopedPhrase.start - 0.25));
+      }
+    });
+  }, [loopedPhrase, seek, subscribe]);
 
   const stateValue = useMemo<PlaybackTranscriptState>(
     () => ({
@@ -75,8 +109,10 @@ export function PlaybackTranscriptProvider({
       lastSegmentEnd,
       introSkipLeadSec: INTRO_SKIP_LEAD_SEC,
       skipOutroPending,
+      phraseLoopEnabled: loopedPhrase != null,
+      loopedPhrase,
     }),
-    [segments, transcriptSource, firstSegmentStart, lastSegmentEnd, skipOutroPending],
+    [segments, transcriptSource, firstSegmentStart, lastSegmentEnd, skipOutroPending, loopedPhrase],
   );
 
   const actionsValue = useMemo<PlaybackTranscriptActions>(
@@ -84,8 +120,9 @@ export function PlaybackTranscriptProvider({
       handleSkipIntro,
       handleSkipOutro,
       clearSkipOutroPending,
+      togglePhraseLoop,
     }),
-    [handleSkipIntro, handleSkipOutro, clearSkipOutroPending],
+    [handleSkipIntro, handleSkipOutro, clearSkipOutroPending, togglePhraseLoop],
   );
 
   return (

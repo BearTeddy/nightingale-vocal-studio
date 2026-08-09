@@ -36,6 +36,7 @@ export const ActionsSection = ({
     supportsAnalysisActions,
     analysis,
     onEditLyrics: () => setMode({ mode: "edit-lyrics", song }),
+    onEditMelody: () => setMode({ mode: "edit-melody", song }),
     onChangeLanguage: () => setMode({ mode: "language", song }),
     run,
   });

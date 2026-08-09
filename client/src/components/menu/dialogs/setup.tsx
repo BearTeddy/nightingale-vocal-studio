@@ -345,7 +345,7 @@ export const Setup = () => {
     useCallback(
       (navAction) => {
         if (!shouldRunSetup) {
-          return;
+          return false;
         }
 
         if (navAction.back) {
@@ -355,7 +355,7 @@ export const Setup = () => {
             exit();
           }
 
-          return;
+          return true;
         }
 
         if (navAction.confirm) {
@@ -367,7 +367,9 @@ export const Setup = () => {
           } else if (step === "error" && EXIT_SUPPORTED) {
             exit();
           }
+          return true;
         }
+        return navAction.up || navAction.down || navAction.left || navAction.right;
       },
       [invalidatePostSetupState, setShouldRunSetup, shouldRunSetup, startSetup, step],
     ),

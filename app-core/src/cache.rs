@@ -29,6 +29,10 @@ impl CacheDir {
         self.path.join(format!("{hash}_transcript.json"))
     }
 
+    pub fn melody_path(&self, hash: &str) -> PathBuf {
+        self.path.join(format!("{hash}_melody_v1.json"))
+    }
+
     pub fn variant_transcript_path(&self, hash: &str, tempo: f64) -> PathBuf {
         self.path
             .join(format!("{hash}_transcript_{}.json", format_tempo(tempo)))
@@ -122,6 +126,7 @@ impl CacheDir {
     pub fn delete_song_cache(&self, hash: &str) {
         for path in [
             self.transcript_path(hash),
+            self.melody_path(hash),
             self.instrumental_path(hash),
             self.vocals_path(hash),
             self.legacy_instrumental_path(hash),
@@ -527,12 +532,24 @@ fn copy_path_entry(src: &Path, dst: &Path) -> Result<(), String> {
         #[cfg(windows)]
         {
             let target_is_dir = src.is_dir();
-            if target_is_dir {
+            let link_result = if target_is_dir {
                 std::os::windows::fs::symlink_dir(&link_target, dst)
-                    .map_err(|e| format!("failed creating symlink dir {:?}: {e}", dst))?;
             } else {
                 std::os::windows::fs::symlink_file(&link_target, dst)
-                    .map_err(|e| format!("failed creating symlink file {:?}: {e}", dst))?;
+            };
+            if let Err(link_error) = link_result {
+                let resolved = if link_target.is_absolute() {
+                    link_target.clone()
+                } else {
+                    src.parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join(&link_target)
+                };
+                tracing::warn!(
+                    "Could not recreate link {:?} ({link_error}); copying its target instead",
+                    dst
+                );
+                copy_path_entry(&resolved, dst)?;
             }
         }
         return Ok(());
@@ -631,6 +648,7 @@ pub fn change_app_data_path(new_path: PathBuf) -> Result<PathBuf, String> {
         cfg.data_path = Some(new_root.clone());
         cfg.save();
         crate::library_db::reconnect_library_at_root(&new_root)?;
+        let _ = crate::desktop_shortcut::ensure_data_shortcut(&new_root);
         return Ok(new_root);
     }
 
@@ -649,6 +667,7 @@ pub fn change_app_data_path(new_path: PathBuf) -> Result<PathBuf, String> {
     let mut cfg = crate::config::AppConfig::load();
     cfg.data_path = Some(new_root.clone());
     cfg.save();
+    let _ = crate::desktop_shortcut::ensure_data_shortcut(&new_root);
     cleanup_migrated_source_entries(&old_root, &migrated);
 
     Ok(new_root)

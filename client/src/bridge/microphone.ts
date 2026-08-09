@@ -1,4 +1,5 @@
 import type { MicCaptureOptions } from "@/types/MicCaptureOptions";
+import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { MicrophoneInfo } from "@/types/MicrophoneInfo";
 import type { MicSampleFrame } from "@/types/MicSampleFrame";
 
@@ -12,6 +13,8 @@ export interface MicrophoneAdapter {
   startCapture(preferred: string | null, options: MicCaptureOptions): Promise<string>;
   stopCapture(): Promise<void>;
   onSamples(cb: MicSamplesCallback): Promise<StopListening>;
+  getCaptureStatus?(): Promise<MicCaptureStatus>;
+  getLatestSamples?(): Promise<MicSampleFrame | null>;
 }
 
 const subscribers = new Set<MicSamplesCallback>();

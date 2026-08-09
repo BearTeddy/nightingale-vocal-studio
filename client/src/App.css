@@ -248,6 +248,11 @@
 }
 
 @layer utilities {
+  [data-spatial-navigation] [data-spatial-nav-focused="true"] {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;

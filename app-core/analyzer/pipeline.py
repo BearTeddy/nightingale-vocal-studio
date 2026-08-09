@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+from glob import glob
 
 from gpu import hard_free_gpu, log_vram
 from whisper_compat import progress
@@ -11,6 +12,7 @@ from key_detect import detect_key
 from stems import separate_stems, separate_stems_uvr
 from transcribe import transcribe_vocals
 from align import align_lyrics
+from melody import generate_melody
 
 
 def ffmpeg_bin():
@@ -158,8 +160,19 @@ def run_pipeline(
     os.makedirs(output_dir, exist_ok=True)
 
     transcript_path = os.path.join(output_dir, f"{file_hash}_transcript.json")
+    melody_path = os.path.join(output_dir, f"{file_hash}_melody_v1.json")
     transcript_exists = os.path.isfile(transcript_path)
     if transcript_exists and not skip_transcription:
+        if not os.path.isfile(melody_path):
+            cached_vocals = sorted(glob(os.path.join(output_dir, f"{file_hash}_vocals_*.mp3")))
+            if cached_vocals:
+                try:
+                    with open(transcript_path, "r", encoding="utf-8") as f:
+                        existing_transcript = json.load(f)
+                    progress(96, "Building pitch guide...")
+                    generate_melody(cached_vocals[0], melody_path, existing_transcript, device)
+                except Exception as e:
+                    print(f"[nightingale:LOG] Pitch guide generation failed: {e}", flush=True)
         progress(100, "Already analyzed, skipping")
         return
 
@@ -194,6 +207,12 @@ def run_pipeline(
             progress(95, "Writing transcript...")
             with open(transcript_path, "w", encoding="utf-8") as f:
                 json.dump(transcript, f, ensure_ascii=False, indent=2)
+            if vocals_path:
+                try:
+                    progress(96, "Building pitch guide...")
+                    generate_melody(vocals_path, melody_path, transcript, device)
+                except Exception as e:
+                    print(f"[nightingale:LOG] Pitch guide generation failed: {e}", flush=True)
             return
 
         if callable(whisper_model):
@@ -218,5 +237,11 @@ def run_pipeline(
         progress(95, "Writing transcript...")
         with open(transcript_path, "w", encoding="utf-8") as f:
             json.dump(transcript, f, ensure_ascii=False, indent=2)
+        if vocals_path:
+            try:
+                progress(96, "Building pitch guide...")
+                generate_melody(vocals_path, melody_path, transcript, device)
+            except Exception as e:
+                print(f"[nightingale:LOG] Pitch guide generation failed: {e}", flush=True)
     finally:
         hard_free_gpu("pipeline_end")

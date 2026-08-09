@@ -114,10 +114,15 @@ export const Actions = ({ registerCallback, focusedSidebarIndex }: ActionsProps)
   useNavInput(
     useCallback((action) => {
       if (!dropdownOpenRef.current) {
-        return;
+        return false;
       }
 
       const focused = document.activeElement;
+
+      if (action.back) {
+        setDropdownOpen(false);
+        return true;
+      }
 
       if (action.up || action.down) {
         const key = action.up ? "ArrowUp" : "ArrowDown";
@@ -132,6 +137,7 @@ export const Actions = ({ registerCallback, focusedSidebarIndex }: ActionsProps)
           focused.click();
         }
       }
+      return true;
     }, []),
   );
 

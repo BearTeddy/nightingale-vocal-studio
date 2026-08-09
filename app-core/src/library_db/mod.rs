@@ -25,6 +25,7 @@ mod analysis_queue;
 mod connection;
 mod migrations;
 mod playlists;
+mod practice;
 mod queries;
 mod rebase;
 pub mod remote;
@@ -36,6 +37,11 @@ pub use analysis_queue::{
 };
 pub use migrations::rewrite_legacy_jellyfin_paths;
 pub use playlists::{PlaylistDefinition, PlaylistSongKeyKind, replace_all_playlists};
+pub use practice::{
+    list_practice_sessions, list_recording_takes_by_status, load_recording_take,
+    practice_session_exists, repair_recovered_session_end_time, upsert_practice_session,
+    upsert_recording_take,
+};
 pub use queries::{
     iter_file_hashes_filtered_not_analyzed, load_meta_sql, load_songs_page,
     query_library_menu_items,

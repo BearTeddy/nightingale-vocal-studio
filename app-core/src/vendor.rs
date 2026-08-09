@@ -87,11 +87,79 @@ fn ready_marker() -> PathBuf {
     vendor_dir().join(".ready")
 }
 
+fn rewrite_venv_home(config: &str, home: &Path) -> String {
+    let home_line = format!("home = {}", home.display());
+    let mut replaced = false;
+    let mut lines = config
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("home =") {
+                replaced = true;
+                home_line.clone()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+    if !replaced {
+        lines.insert(0, home_line);
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+#[cfg(windows)]
+fn repair_relocated_venv() -> Result<(), String> {
+    let config_path = vendor_dir().join("venv").join("pyvenv.cfg");
+    if !config_path.is_file() {
+        return Ok(());
+    }
+    let config = std::fs::read_to_string(&config_path)
+        .map_err(|error| format!("Could not read Python environment config: {error}"))?;
+    let configured_home = config.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("home =")
+            .map(|value| PathBuf::from(value.trim()))
+    });
+    let expected_python = configured_home
+        .as_ref()
+        .and_then(|home| home.file_name())
+        .map(|directory| {
+            vendor_dir()
+                .join("python")
+                .join(directory)
+                .join("python.exe")
+        })
+        .filter(|path| path.is_file())
+        .or_else(find_installed_python)
+        .ok_or_else(|| "Could not locate Nightingale's installed Python runtime".to_string())?;
+    let expected_home = expected_python
+        .parent()
+        .ok_or_else(|| "Nightingale's Python runtime path is invalid".to_string())?;
+    if configured_home.as_deref() == Some(expected_home) {
+        return Ok(());
+    }
+    std::fs::write(&config_path, rewrite_venv_home(&config, expected_home))
+        .map_err(|error| format!("Could not repair relocated Python environment: {error}"))
+}
+
+#[cfg(not(windows))]
+fn repair_relocated_venv() -> Result<(), String> {
+    Ok(())
+}
+
+fn python_runtime_works() -> bool {
+    silent_command(python_path())
+        .args(["-c", "import sys"])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 pub fn is_ready() -> bool {
-    ready_marker().is_file()
+    let files_ready = ready_marker().is_file()
         && ffmpeg_path().is_file()
         && python_path().is_file()
-        && analyzer_dir().join("analyze.py").is_file()
+        && analyzer_dir().join("analyze.py").is_file();
+    files_ready && repair_relocated_venv().is_ok() && python_runtime_works()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
@@ -541,15 +609,19 @@ fn find_installed_python() -> Option<PathBuf> {
 
 pub fn step_create_venv() -> Result<(), String> {
     let venv_dir = vendor_dir().join("venv");
-    if python_path().is_file() {
+    if python_path().is_file() && repair_relocated_venv().is_ok() && python_runtime_works() {
         return Ok(());
     }
 
     let installed_python = find_installed_python()
         .ok_or("Could not find installed Python — run python install first")?;
 
-    let output = silent_command(uv_path())
-        .args(["venv"])
+    let mut command = silent_command(uv_path());
+    command.arg("venv");
+    if venv_dir.exists() {
+        command.arg("--clear");
+    }
+    let output = command
         .arg(&venv_dir)
         .arg("--python")
         .arg(&installed_python)
@@ -685,6 +757,8 @@ pub fn step_install_packages() -> Result<(), String> {
         "demucs>=4.0.0",
         whisperx_pkg,
         "soundfile",
+        "librosa>=0.11",
+        "torchcrepe>=0.0.24",
         "huggingface_hub>=0.27.0",
         audio_sep_pkg,
         "onnx-asr>=0.5.0",
@@ -824,4 +898,31 @@ pub fn refresh_analyzer_scripts_if_ready() -> Result<(), String> {
 
 pub fn mark_ready() -> Result<(), String> {
     std::fs::write(ready_marker(), "ok").map_err(|e| format!("Failed to mark ready: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_venv_home;
+    use std::path::Path;
+
+    #[test]
+    fn rewrites_a_relocated_python_home_without_losing_config() {
+        let config = "home = C:\\old\\vendor\\python\\cpython\nversion_info = 3.10.20\n";
+        let updated = rewrite_venv_home(
+            config,
+            Path::new("D:\\Nightingale\\Data\\vendor\\python\\cpython"),
+        );
+        assert!(updated.starts_with("home = D:\\Nightingale\\Data\\vendor\\python\\cpython\n"));
+        assert!(updated.contains("version_info = 3.10.20\n"));
+        assert!(!updated.contains("C:\\old"));
+    }
+
+    #[test]
+    fn adds_a_missing_python_home_entry() {
+        let updated = rewrite_venv_home(
+            "version_info = 3.10.20\n",
+            Path::new("D:\\Nightingale\\Data\\vendor\\python\\cpython"),
+        );
+        assert!(updated.starts_with("home = D:\\Nightingale\\Data\\vendor\\python\\cpython\n"));
+    }
 }

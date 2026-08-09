@@ -7,6 +7,9 @@ import {
   getAudioPaths as tauriRawGetAudioPaths,
   getMediaEndpoint as tauriGetMediaEndpoint,
   loadTranscript as tauriLoadTranscript,
+  loadMelodyMap as tauriLoadMelodyMap,
+  rebuildMelodyMap as tauriRebuildMelodyMap,
+  saveMelodyMap as tauriSaveMelodyMap,
   onPixabayVideoDownloaded as tauriOnPixabayVideoDownloaded,
   onStemsReady as tauriOnStemsReady,
 } from "./playback.tauri";
@@ -103,6 +106,9 @@ export const playbackAdapter: PlaybackAdapter = isTauri ? tauriPlaybackAdapter :
 // ─── Re-exports for command/event call sites ─────────────────────────────
 
 export const loadTranscript = tauriLoadTranscript;
+export const loadMelodyMap = tauriLoadMelodyMap;
+export const rebuildMelodyMap = tauriRebuildMelodyMap;
+export const saveMelodyMap = tauriSaveMelodyMap;
 export const ensureMp3Stems = tauriEnsureMp3Stems;
 export const ensurePlayableSourceVideo = tauriEnsurePlayableSourceVideo;
 export const fetchPixabayVideos = tauriFetchPixabayVideos;

@@ -8,6 +8,7 @@ import { Stats } from "./stats";
 import { Header } from "./header";
 import { MainNavigation } from "./main-navigation";
 import { Actions } from "./actions";
+import { StudioAction } from "./studio-action";
 import { useMenuFocus } from "@/contexts/menu-focus-context";
 import { useCallback, useEffect, useRef, useState, type PropsWithChildren } from "react";
 
@@ -25,12 +26,14 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
   const focusRef = useRef(focus);
   const themeCallbackRef = useRef<SidebarCallback | null>(null);
   const folderCallbackRef = useRef<SidebarSubCallback | null>(null);
+  const studioCallbackRef = useRef<SidebarCallback | null>(null);
   const cacheCallbackRef = useRef<SidebarSubCallback | null>(null);
   const actionsCallbackRef = useRef<SidebarCallback | null>(null);
 
   focusRef.current = focus;
 
-  const cacheSlotIndex = MAIN_NAV_BASE_INDEX + mainNavigationCallbacks.length;
+  const studioSlotIndex = MAIN_NAV_BASE_INDEX + mainNavigationCallbacks.length;
+  const cacheSlotIndex = studioSlotIndex + 1;
   const actionsSlotIndex = cacheSlotIndex + 1;
   const sidebarCount = actionsSlotIndex + 1;
 
@@ -44,6 +47,10 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
 
   const registerFolderCallback = useCallback((callback: SidebarSubCallback | null) => {
     folderCallbackRef.current = callback;
+  }, []);
+
+  const registerStudioCallback = useCallback((callback: SidebarCallback | null) => {
+    studioCallbackRef.current = callback;
   }, []);
 
   const registerCacheCallback = useCallback((callback: SidebarSubCallback | null) => {
@@ -71,6 +78,11 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
         return;
       }
 
+      if (index === studioSlotIndex) {
+        studioCallbackRef.current?.();
+        return;
+      }
+
       if (index === cacheSlotIndex) {
         cacheCallbackRef.current?.(focusRef.current.sidebarSubIndex);
         return;
@@ -80,7 +92,7 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
         actionsCallbackRef.current?.();
       }
     },
-    [actionsSlotIndex, cacheSlotIndex, mainNavigationCallbacks],
+    [actionsSlotIndex, cacheSlotIndex, mainNavigationCallbacks, studioSlotIndex],
   );
 
   const clampSidebarFocus = useCallback(() => {
@@ -111,6 +123,11 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
           registerCallbacks={registerMainNavigationCallbacks}
           folderFocusedSidebarIndex={FOLDER_SLOT_INDEX}
           registerFolderCallback={registerFolderCallback}
+        />
+
+        <StudioAction
+          focusedSidebarIndex={studioSlotIndex}
+          registerCallback={registerStudioCallback}
         />
 
         <SidebarFooter>

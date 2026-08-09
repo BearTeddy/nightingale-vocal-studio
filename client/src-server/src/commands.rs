@@ -113,6 +113,21 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             app_core::start_scan();
             Ok(Value::Null)
         }
+        "import_youtube" => {
+            #[derive(Deserialize)]
+            struct Args {
+                url: String,
+            }
+            let args: Args = deserialize(payload)?;
+            let result = tokio::task::spawn_blocking(move || app_core::import_youtube(&args.url))
+                .await
+                .map_err(|error| {
+                    ApiError::internal(format!("YouTube import task failed: {error}"))
+                })?
+                .map_err(ApiError::bad_request)?;
+            app_core::start_scan();
+            Ok(serde_json::to_value(result).map_err(serde_err)?)
+        }
         "set_library_source" => {
             #[derive(Deserialize)]
             struct Args {
@@ -174,10 +189,11 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
                 client_id: Option<String>,
             }
             let args: Args = deserialize(payload)?;
-            let result = tokio::task::spawn_blocking(move || app_core::plex_begin_pin(args.client_id))
-                .await
-                .map_err(blocking_task_err)?
-                .map_err(|error| ApiError::bad_request(error.to_string()))?;
+            let result =
+                tokio::task::spawn_blocking(move || app_core::plex_begin_pin(args.client_id))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(|error| ApiError::bad_request(error.to_string()))?;
             Ok(serde_json::to_value(result).map_err(serde_err)?)
         }
         "plex_poll_pin" => {
@@ -347,6 +363,34 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             app_core::load_transcript(&args.file_hash)
                 .map_err(|e| ApiError::internal(e.to_string()))
         }
+        "load_melody_map" => {
+            let args: FileHashArgs = deserialize(payload)?;
+            Ok(
+                serde_json::to_value(app_core::load_melody_map(&args.file_hash))
+                    .map_err(serde_err)?,
+            )
+        }
+        "rebuild_melody_map" => {
+            let args: FileHashArgs = deserialize(payload)?;
+            let map =
+                tokio::task::spawn_blocking(move || app_core::rebuild_melody_map(&args.file_hash))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(map).map_err(serde_err)?)
+        }
+        "save_melody_map" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                file_hash: String,
+                melody: app_core::MelodyMap,
+            }
+            let args: Args = deserialize(payload)?;
+            app_core::save_melody_map(&args.file_hash, args.melody)
+                .map_err(ApiError::bad_request)?;
+            Ok(Value::Null)
+        }
         "get_audio_paths" => {
             let args: FileHashArgs = deserialize(payload)?;
             Ok(
@@ -371,6 +415,53 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
         // ── Mic (browser-side; no server-side state) ────────────────────
         "list_microphones" => Ok(Value::Array(vec![])),
         "start_mic_capture" | "stop_mic_capture" => Ok(Value::Null),
+        "start_vocal_recording"
+        | "pause_vocal_recording"
+        | "resume_vocal_recording"
+        | "stop_vocal_recording" => Err(ApiError::bad_request(
+            "Vocal recording is available in the Nightingale desktop app",
+        )),
+        "export_recording" => {
+            #[derive(Deserialize)]
+            struct Args {
+                request: app_core::ExportRecordingRequest,
+            }
+            let args: Args = deserialize(payload)?;
+            let take =
+                tokio::task::spawn_blocking(move || app_core::export_recording(args.request))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(take).map_err(serde_err)?)
+        }
+        "save_practice_session" => {
+            #[derive(Deserialize)]
+            struct Args {
+                session: app_core::SavePracticeSession,
+            }
+            let args: Args = deserialize(payload)?;
+            app_core::save_practice_session(args.session).map_err(ApiError::bad_request)?;
+            Ok(Value::Null)
+        }
+        "list_practice_sessions" => {
+            #[derive(Deserialize)]
+            struct Args {
+                profile: Option<String>,
+            }
+            let args: Args = deserialize(payload)?;
+            let sessions = app_core::list_practice_sessions(args.profile.as_deref())
+                .map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(sessions).map_err(serde_err)?)
+        }
+        "load_recording_take" => {
+            #[derive(Deserialize)]
+            struct Args {
+                id: String,
+            }
+            let args: Args = deserialize(payload)?;
+            let take = app_core::load_recording_take(&args.id).map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(take).map_err(serde_err)?)
+        }
 
         _ => Err(ApiError(
             StatusCode::NOT_FOUND,

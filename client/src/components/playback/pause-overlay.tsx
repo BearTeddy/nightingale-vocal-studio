@@ -9,7 +9,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useDialogNav } from "@/hooks/navigation/use-dialog-nav";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 const RING = "ring-2 ring-primary";
@@ -22,15 +22,21 @@ interface PauseOverlayProps {
 }
 
 export const PauseOverlay = ({ open, onExit, onContinue }: PauseOverlayProps) => {
+  const exitingRef = useRef(false);
+  const handleExit = useCallback(() => {
+    exitingRef.current = true;
+    onExit();
+  }, [onExit]);
+
   const onConfirm = useCallback(
     (index: number) => {
       if (index === 0) {
         onContinue();
       } else {
-        onExit();
+        handleExit();
       }
     },
-    [onContinue, onExit],
+    [handleExit, onContinue],
   );
 
   const { focusedIndex } = useDialogNav({
@@ -41,22 +47,30 @@ export const PauseOverlay = ({ open, onExit, onContinue }: PauseOverlayProps) =>
   });
 
   return (
-    <AlertDialog open={open} onOpenChange={(v) => !v && onContinue()}>
+    <AlertDialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) return;
+        if (exitingRef.current) return;
+        onContinue();
+      }}
+    >
       <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
         <AlertDialogHeader>
           <AlertDialogTitle>Paused</AlertDialogTitle>
-          <AlertDialogDescription>Exiting now won&apos;t save your progress</AlertDialogDescription>
+          <AlertDialogDescription>
+            Your current score and recording will be saved before returning to the library.
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel
-            onClick={onContinue}
             className={cn(NO_FOCUS_RING, open && focusedIndex === 0 && RING)}
           >
             Continue
           </AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
-            onClick={onExit}
+            onClick={handleExit}
             className={cn(NO_FOCUS_RING, open && focusedIndex === 1 && RING)}
           >
             Exit to Menu

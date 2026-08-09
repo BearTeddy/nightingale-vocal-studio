@@ -5,6 +5,8 @@ export type Word = {
   score?: number;
   estimated?: boolean;
   reading?: string;
+  /** Present for authored UltraStar note events. Zero maps to MIDI 60. */
+  pitch?: number;
 };
 
 export type Segment = {

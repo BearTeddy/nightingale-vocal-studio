@@ -7,6 +7,7 @@ import { NavInputProvider } from "./contexts/nav-input-context";
 import { MenuFocusProvider } from "./contexts/menu-focus-context";
 import { MenuIndex, MenuLayout } from "./pages/menu/menu";
 import { SettingsPage } from "./pages/menu/settings";
+import { VocalStudioPage } from "./pages/studio/vocal-studio";
 import { Playback } from "./pages/playback/playback";
 import { ThemeProvider } from "./contexts/theme-context";
 import { useConfig } from "./queries/use-config";
@@ -30,6 +31,7 @@ const InnerWrapper = () => (
           <Route path="/" element={<MenuLayout />}>
             <Route index element={<MenuIndex />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="studio" element={<VocalStudioPage />} />
           </Route>
           <Route path="/playback" element={<Playback />} />
         </Routes>

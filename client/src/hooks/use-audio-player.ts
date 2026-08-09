@@ -37,6 +37,11 @@ export interface AudioPlayer {
   getAudioContext: () => AudioContext | null;
 }
 
+function closeAudioContext(context: AudioContext | null): void {
+  if (!context || context.state === "closed") return;
+  void context.close().catch(() => {});
+}
+
 export function useAudioPlayer(
   fileHash: string,
   initialGuideVolume: number,
@@ -285,7 +290,7 @@ export function useAudioPlayer(
       instrumentalBufRef.current = null;
       vocalsBufRef.current = null;
       vocalsGainRef.current = null;
-      ctx.close();
+      closeAudioContext(ctx);
       ctxRef.current = null;
     };
   }, [adapter, enabled, fileHash, initialGuideVolume, startSources, stopSources]);
@@ -347,7 +352,7 @@ export function useAudioPlayer(
 
     stopSources();
 
-    ctxRef.current?.close();
+    closeAudioContext(ctxRef.current);
     ctxRef.current = null;
   }, [stopSources]);
 

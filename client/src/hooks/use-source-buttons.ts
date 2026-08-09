@@ -1,5 +1,5 @@
 import { useMemo, type ComponentType, type SVGProps } from "react";
-import { Disc3Icon, FolderIcon, RefreshCwIcon } from "lucide-react";
+import { Disc3Icon, FolderIcon, RefreshCwIcon, YoutubeIcon } from "lucide-react";
 
 import { JellyfinIcon } from "@/components/icons/jellyfin";
 import { PlexIcon } from "@/components/icons/plex";
@@ -72,6 +72,7 @@ export const useSourceButtons = (): SourceButton[] => {
     jellyfinHealth,
     navidromeHealth,
     plexHealth,
+    isFolderSource,
   } = useLibrarySourceActions();
 
   const jellyfin = useMemo(
@@ -147,6 +148,17 @@ export const useSourceButtons = (): SourceButton[] => {
           },
         ];
 
+    if (isFolderSource) {
+      buttons.push({
+        key: "youtube",
+        icon: YoutubeIcon,
+        label: "Import from YouTube",
+        tooltip: "Import from YouTube",
+        handler: () => setMode("youtube-import"),
+        disabled: isPending,
+      });
+    }
+
     if (hasSource) {
       buttons.push({
         key: "rescan",
@@ -163,6 +175,7 @@ export const useSourceButtons = (): SourceButton[] => {
     hasSource,
     libraryPinned,
     isPending,
+    isFolderSource,
     jellyfin,
     navidrome,
     plex,

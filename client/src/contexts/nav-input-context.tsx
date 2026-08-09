@@ -1,5 +1,6 @@
 import { createContext, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useGamepad, type GamepadSnapshot } from "@/hooks/navigation/use-gamepad";
+import { dispatchNewestFirst, type ConsumableSubscriber } from "@/lib/nav-dispatch";
 
 export type NavAction = {
   up: boolean;
@@ -10,7 +11,7 @@ export type NavAction = {
   back: boolean;
 };
 
-type NavSubscriber = (action: NavAction) => void;
+type NavSubscriber = ConsumableSubscriber<NavAction>;
 type Unsubscribe = () => void;
 
 export interface NavInputContextValue {
@@ -72,9 +73,7 @@ export function NavInputProvider({ children }: { children: ReactNode }) {
       back: false,
       ...partial,
     };
-    for (const fn of subscribersRef.current) {
-      fn(action);
-    }
+    dispatchNewestFirst(subscribersRef.current, action);
   }, []);
 
   useEffect(() => {

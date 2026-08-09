@@ -42,12 +42,21 @@ export interface PlaybackTransportActions {
   getVocalsBuffer: AudioPlayer["getVocalsBuffer"];
   getScoringBuffer: AudioPlayer["getScoringBuffer"];
   getAudioContext: AudioPlayer["getAudioContext"];
+  subscribeTransportEvents: (fn: (event: TransportEvent) => void) => () => void;
   /** Raw audio-engine pause; does NOT raise the `paused` UI flag. */
   pauseAudio: () => void;
+  finishAudio: () => void;
   handlePause: () => void;
   handleContinue: () => void;
   handleExit: () => void;
 }
+
+export type TransportEvent =
+  | { type: "pause"; sourceTime: number }
+  | { type: "resume"; sourceTime: number }
+  | { type: "seek"; sourceTime: number; targetTime: number; playing: boolean }
+  | { type: "finish"; sourceTime: number }
+  | { type: "exit"; sourceTime: number };
 
 const TransportStateContext = createContext<PlaybackTransportState | null>(null);
 const TransportActionsContext = createContext<PlaybackTransportActions | null>(null);
@@ -70,6 +79,16 @@ export function PlaybackTransportProvider({
 
   const [stemsReady, setStemsReady] = useState(false);
   const [paused, setPaused] = useState(false);
+  const transportSubscribersRef = useRef<Set<(event: TransportEvent) => void>>(new Set());
+
+  const emitTransportEvent = useCallback((event: TransportEvent) => {
+    for (const subscriber of transportSubscribersRef.current) subscriber(event);
+  }, []);
+
+  const subscribeTransportEvents = useCallback((fn: (event: TransportEvent) => void) => {
+    transportSubscribersRef.current.add(fn);
+    return () => transportSubscribersRef.current.delete(fn);
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -115,19 +134,40 @@ export function PlaybackTransportProvider({
   }, [audio.error, navigate]);
 
   const handlePause = useCallback(() => {
+    emitTransportEvent({ type: "pause", sourceTime: audio.getCurrentTime() });
     audio.pause();
     setPaused(true);
-  }, [audio.pause]);
+  }, [audio.getCurrentTime, audio.pause, emitTransportEvent]);
 
   const handleContinue = useCallback(() => {
+    emitTransportEvent({ type: "resume", sourceTime: audio.getCurrentTime() });
     setPaused(false);
     audio.resume();
-  }, [audio.resume]);
+  }, [audio.getCurrentTime, audio.resume, emitTransportEvent]);
+
+  const seek = useCallback(
+    (time: number) => {
+      emitTransportEvent({
+        type: "seek",
+        sourceTime: audio.getCurrentTime(),
+        targetTime: time,
+        playing: audio.isPlaying,
+      });
+      audio.seek(time);
+    },
+    [audio.getCurrentTime, audio.isPlaying, audio.seek, emitTransportEvent],
+  );
 
   const handleExit = useCallback(() => {
+    emitTransportEvent({ type: "exit", sourceTime: audio.getCurrentTime() });
     audio.cleanup();
     navigate("/", { replace: true });
-  }, [audio.cleanup, navigate]);
+  }, [audio.cleanup, audio.getCurrentTime, emitTransportEvent, navigate]);
+
+  const finishAudio = useCallback(() => {
+    emitTransportEvent({ type: "finish", sourceTime: audio.getCurrentTime() });
+    audio.pause();
+  }, [audio.getCurrentTime, audio.pause, emitTransportEvent]);
 
   const stateValue = useMemo<PlaybackTransportState>(
     () => ({
@@ -156,12 +196,14 @@ export function PlaybackTransportProvider({
     () => ({
       subscribe: audio.subscribe,
       getCurrentTime: audio.getCurrentTime,
-      seek: audio.seek,
+      seek,
       setGuideVolume: audio.setGuideVolume,
       getVocalsBuffer: audio.getVocalsBuffer,
       getScoringBuffer: audio.getScoringBuffer,
       getAudioContext: audio.getAudioContext,
+      subscribeTransportEvents,
       pauseAudio: audio.pause,
+      finishAudio,
       handlePause,
       handleContinue,
       handleExit,
@@ -169,12 +211,14 @@ export function PlaybackTransportProvider({
     [
       audio.subscribe,
       audio.getCurrentTime,
-      audio.seek,
+      seek,
       audio.setGuideVolume,
       audio.getVocalsBuffer,
       audio.getScoringBuffer,
       audio.getAudioContext,
+      subscribeTransportEvents,
       audio.pause,
+      finishAudio,
       handlePause,
       handleContinue,
       handleExit,

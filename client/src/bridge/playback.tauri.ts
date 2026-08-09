@@ -1,11 +1,23 @@
 import type { MediaEndpoint } from "@/types/MediaEndpoint";
 import type { AudioPaths } from "@/types/Transcript";
 import type { Transcript } from "@/types/Transcript";
+import type { MelodyMap } from "@/types/MelodyMap";
 import { invoke, listen, type UnlistenFn } from "./runtime";
 
 export const loadTranscript = async (fileHash: string): Promise<Transcript> => {
   return await invoke<Transcript>("load_transcript", { fileHash });
 };
+
+export const loadMelodyMap = async (fileHash: string): Promise<MelodyMap | null> => {
+  return await invoke<MelodyMap | null>("load_melody_map", { fileHash });
+};
+
+export const saveMelodyMap = async (fileHash: string, melody: MelodyMap): Promise<void> => {
+  await invoke<void>("save_melody_map", { fileHash, melody });
+};
+
+export const rebuildMelodyMap = async (fileHash: string): Promise<MelodyMap> =>
+  await invoke<MelodyMap>("rebuild_melody_map", { fileHash });
 
 export const getAudioPaths = async (fileHash: string): Promise<AudioPaths> => {
   return await invoke<AudioPaths>("get_audio_paths", { fileHash });

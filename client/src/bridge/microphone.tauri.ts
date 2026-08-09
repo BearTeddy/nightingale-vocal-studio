@@ -1,4 +1,5 @@
 import type { MicCaptureOptions } from "@/types/MicCaptureOptions";
+import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { MicrophoneInfo } from "@/types/MicrophoneInfo";
 import type { MicSampleFrame } from "@/types/MicSampleFrame";
 import { Channel, invoke } from "./runtime";
@@ -10,6 +11,7 @@ import { dispatchMicFrame, type MicrophoneAdapter, subscribeMicSamples } from ".
  * be free to reorder).
  */
 let opChain: Promise<unknown> = Promise.resolve();
+let activeChannel: object | null = null;
 
 const enqueue = <T>(op: () => Promise<T>): Promise<T> => {
   const next = opChain.catch(() => undefined).then(op);
@@ -29,21 +31,36 @@ const startCapture = (preferred: string | null, options: MicCaptureOptions): Pro
      */
     const channel = new Channel<MicSampleFrame>();
     channel.onmessage = dispatchMicFrame;
-    return await invoke<string>("start_mic_capture", {
-      preferred,
-      options,
-      onSamples: channel,
-    });
+    activeChannel = channel;
+    try {
+      return await invoke<string>("start_mic_capture", {
+        preferred,
+        options,
+        onSamples: channel,
+      });
+    } catch (error) {
+      if (activeChannel === channel) activeChannel = null;
+      throw error;
+    }
   });
 
 const stopCapture = (): Promise<void> =>
   enqueue(async () => {
     await invoke("stop_mic_capture");
+    activeChannel = null;
   });
+
+const getCaptureStatus = (): Promise<MicCaptureStatus> =>
+  invoke<MicCaptureStatus>("get_mic_capture_status");
+
+const getLatestSamples = (): Promise<MicSampleFrame | null> =>
+  invoke<MicSampleFrame | null>("get_latest_mic_samples");
 
 export const tauriMicrophoneAdapter: MicrophoneAdapter = {
   listDevices,
   startCapture,
   stopCapture,
   onSamples: async (cb) => subscribeMicSamples(cb),
+  getCaptureStatus,
+  getLatestSamples,
 };

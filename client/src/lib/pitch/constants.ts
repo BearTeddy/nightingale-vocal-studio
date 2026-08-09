@@ -11,11 +11,13 @@ export const REF_RMS_GATE = 0.005;
 export const MIC_RMS_GATE = 0.003;
 
 export const PUSH_INTERVAL_SEC = 0.02;
+export const PITCH_DISCONTINUITY_SEC = 0.5;
 export const SMOOTHING = 0.55;
 
 export const PITCH_BUFFER_SIZE = 200;
 
-export const SEMITONE_TOLERANCE = 6;
+export const PITCH_FULL_CREDIT_CENTS = 25;
+export const PITCH_ZERO_CREDIT_CENTS = 100;
 
 export const DEFAULT_MIC_LATENCY_COMPENSATION_SEC = 0.08;
 export const MIN_MIC_LATENCY_COMPENSATION_SEC = 0;

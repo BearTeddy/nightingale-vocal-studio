@@ -5,6 +5,7 @@ mod logging;
 mod lyrics;
 mod microphones;
 mod playback;
+mod practice;
 mod profile;
 mod scanner;
 mod vendor;
@@ -18,14 +19,21 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use cache::{calculate_cache_stats, clear_all, clear_models_command, clear_videos_command};
 use config::{load_config, save_config};
 use lyrics::{apply_timed_lyrics, load_lyrics, provide_lrc, save_lyrics, search_lrclib_lyrics};
-use microphones::{list_microphones, set_monitor_gain, start_mic_capture, stop_mic_capture};
+use microphones::{
+    get_latest_mic_samples, get_mic_capture_status, get_vocal_recording_status, list_microphones,
+    pause_vocal_recording, resume_vocal_recording, set_monitor_gain, start_mic_capture,
+    start_vocal_recording, stop_mic_capture, stop_vocal_recording,
+};
 use playback::{
     ensure_mp3_stems, ensure_playable_source_video, fetch_pixabay_videos, get_audio_paths,
-    load_transcript,
+    load_melody_map, load_transcript, rebuild_melody_map, save_melody_map,
+};
+use practice::{
+    export_recording, list_practice_sessions, load_recording_take, save_practice_session,
 };
 use profile::{add_score, create_profile, delete_profile, load_profiles, switch_profile};
 use scanner::{
-    clear_library_source, jellyfin_login, jellyfin_ping, load_analysis_queue,
+    clear_library_source, import_youtube, jellyfin_login, jellyfin_ping, load_analysis_queue,
     load_library_menu_items, load_songs, load_songs_meta, navidrome_login, navidrome_ping,
     plex_begin_pin, plex_manual_login, plex_ping, plex_poll_pin, set_library_source, trigger_scan,
 };
@@ -104,6 +112,7 @@ pub fn run() {
             add_score,
             // Scanner
             trigger_scan,
+            import_youtube,
             set_library_source,
             clear_library_source,
             jellyfin_login,
@@ -136,14 +145,28 @@ pub fn run() {
             apply_timed_lyrics,
             // Playback
             load_transcript,
+            load_melody_map,
+            rebuild_melody_map,
+            save_melody_map,
             get_audio_paths,
             ensure_mp3_stems,
             ensure_playable_source_video,
             fetch_pixabay_videos,
             get_media_endpoint,
             list_microphones,
+            get_mic_capture_status,
+            get_latest_mic_samples,
+            get_vocal_recording_status,
             start_mic_capture,
             stop_mic_capture,
+            start_vocal_recording,
+            pause_vocal_recording,
+            resume_vocal_recording,
+            stop_vocal_recording,
+            export_recording,
+            save_practice_session,
+            list_practice_sessions,
+            load_recording_take,
             // Vendor
             is_ready,
             trigger_setup

@@ -169,28 +169,28 @@ export function useDialogNav({
 
   const handleNav = useCallback(
     (action: NavAction) => {
-      if (!open || segmentCount === 0) return;
+      if (!open || segmentCount === 0) return false;
 
       const active = document.activeElement;
       if (isInsideMenuOrListbox(active)) {
         if (active instanceof HTMLElement) {
           dispatchMenuKeyFromNav(active, action);
         }
-        return;
+        return true;
       }
 
       if (onActionRef.current?.(clampedSegmentIndex, clampedSlot, action)) {
-        return;
+        return true;
       }
 
       if (action.back) {
         onBackRef.current();
-        return;
+        return true;
       }
 
       if (action.confirm) {
         if (performance.now() - openedAtMsRef.current < CONFIRM_DEBOUNCE_MS) {
-          return;
+          return true;
         }
         if (onConfirmRef.current) {
           onConfirmRef.current(flatFocusedIndex);
@@ -198,7 +198,7 @@ export function useDialogNav({
           const focusables = getVisibleFocusables(containerRef.current);
           focusables[flatFocusedIndex]?.click();
         }
-        return;
+        return true;
       }
 
       if (action.left) {
@@ -207,7 +207,7 @@ export function useDialogNav({
         } else if (!useSegmentedHorizontalNav) {
           setSegmentIndex((prev) => (prev <= 0 ? segmentCount - 1 : prev - 1));
         }
-        return;
+        return true;
       }
 
       if (action.right) {
@@ -216,7 +216,7 @@ export function useDialogNav({
         } else if (!useSegmentedHorizontalNav) {
           setSegmentIndex((prev) => (prev >= segmentCount - 1 ? 0 : prev + 1));
         }
-        return;
+        return true;
       }
 
       if (action.up) {
@@ -226,6 +226,7 @@ export function useDialogNav({
         setSegmentIndex((prev) => (prev >= segmentCount - 1 ? 0 : prev + 1));
         setSlotInSegment(0);
       }
+      return action.up || action.down;
     },
     [
       open,

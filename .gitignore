@@ -1,5 +1,7 @@
 target/
 .env
+__pycache__/
+*.py[cod]
 
 # Site
 site/node_modules/

@@ -1,12 +1,21 @@
 use app_core::{
     AnalysisQueue, AppConfig, JellyfinHealth, JellyfinLoginResult, LibraryMenuItems, LibrarySource,
     LoadSongsParams, NavidromeHealth, NavidromeLoginResult, PlexHealth, PlexPinPollResult,
-    PlexPinStart, PlexServer, SongsMeta, SongsStore,
+    PlexPinStart, PlexServer, SongsMeta, SongsStore, YoutubeImportResult,
 };
 
 #[tauri::command]
 pub fn trigger_scan() {
     app_core::start_scan();
+}
+
+#[tauri::command]
+pub async fn import_youtube(url: String) -> Result<YoutubeImportResult, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || app_core::import_youtube(&url))
+        .await
+        .map_err(|error| format!("YouTube import task failed: {error}"))??;
+    app_core::start_scan_and_analyze(result.downloaded.clone());
+    Ok(result)
 }
 
 #[tauri::command]

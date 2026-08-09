@@ -13,20 +13,22 @@ import type { VideoFlavor } from "@/lib/playback/video-flavor";
 import type { AppConfig } from "@/types/AppConfig";
 import { forwardRef, memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { isPixabayTheme, themeName } from "./background";
+import {
+  Circle,
+  Gamepad2,
+  GraduationCap,
+  Headphones,
+  ImageIcon,
+  Mic2,
+  Repeat2,
+  Square,
+  Volume2,
+} from "lucide-react";
 
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds) % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
-
-function formatGuideText(volume: number): string {
-  const pct = Math.round(volume * 100);
-  return pct === 0 ? "Guide: OFF" : `Guide: ${pct}% [G +/-]`;
-}
-
-function formatThemeText(themeIndex: number, videoFlavor: VideoFlavor): string {
-  return `Theme: ${themeName(themeIndex, videoFlavor)} [T${isPixabayTheme(themeIndex) ? "/F" : ""}]`;
 }
 
 const SkipButton = forwardRef<HTMLButtonElement, { label: string; onClick: () => void }>(
@@ -41,10 +43,6 @@ const SkipButton = forwardRef<HTMLButtonElement, { label: string; onClick: () =>
     </button>
   ),
 );
-
-function HintText({ children, fontSize = "sm" }: { children: React.ReactNode; fontSize?: string }) {
-  return <p className={`text-${fontSize} text-white/50`}>{children}</p>;
-}
 
 const NOTE_BASE_CLASS = `pointer-events-none absolute z-20 text-[0.6rem] text-white/30`;
 const TOUCH_QUERIES = ["(pointer: coarse)", "(any-pointer: coarse)"];
@@ -101,7 +99,6 @@ function SettingsInfo({
   micMonitorUserEnabled,
   themeIndex,
   videoFlavor,
-  showShortcuts,
 }: {
   guideVolume: number;
   guideAvailable: boolean;
@@ -110,31 +107,36 @@ function SettingsInfo({
   micMonitorUserEnabled: boolean;
   themeIndex: number;
   videoFlavor: VideoFlavor;
-  showShortcuts: boolean;
 }) {
+  const guidePercent = Math.round(guideVolume * 100);
+  const theme = themeName(themeIndex, videoFlavor);
   return (
-    <div className="flex flex-col items-end">
+    <div className="flex max-w-[min(36rem,75vw)] flex-wrap justify-end gap-x-3 gap-y-1 text-xs text-white/60">
       {guideAvailable && (
-        <HintText>
-          {showShortcuts
-            ? formatGuideText(guideVolume)
-            : `Guide: ${Math.round(guideVolume * 100)}%`}
-        </HintText>
+        <span
+          className="flex items-center gap-1 tabular-nums"
+          title={`Guide volume ${guidePercent}%`}
+        >
+          <Volume2 className="size-3.5" /> {guidePercent}%
+        </span>
       )}
-      <HintText>
-        Mic: {micUserEnabled ? micName : "OFF"}
-        {showShortcuts ? " [M/N]" : ""}
-      </HintText>
-      <HintText>
-        Monitor: {micMonitorUserEnabled ? "ON" : "OFF"}
-        {showShortcuts ? " [R]" : ""}
-      </HintText>
-      <HintText>
-        {showShortcuts
-          ? formatThemeText(themeIndex, videoFlavor)
-          : `Theme: ${themeName(themeIndex, videoFlavor)}`}
-      </HintText>
-      {showShortcuts && <HintText>[ESC] Back</HintText>}
+      <span
+        className="flex min-w-0 items-center gap-1"
+        title={micUserEnabled ? `Microphone ${micName}` : "Microphone off"}
+      >
+        <Mic2 className="size-3.5 shrink-0" />
+        <span className="max-w-44 truncate">{micUserEnabled ? micName : "Off"}</span>
+      </span>
+      <span
+        className="flex items-center gap-1"
+        title={`Microphone monitoring ${micMonitorUserEnabled ? "on" : "off"}`}
+      >
+        <Headphones className="size-3.5" /> {micMonitorUserEnabled ? "On" : "Off"}
+      </span>
+      <span className="flex min-w-0 items-center gap-1" title={`Background ${theme}`}>
+        <ImageIcon className="size-3.5 shrink-0" />
+        <span className="max-w-36 truncate">{theme}</span>
+      </span>
     </div>
   );
 }
@@ -151,6 +153,8 @@ function TouchControls({
   const [open, setOpen] = useState(false);
   const { guideVolume, guideAvailable } = usePlaybackTransportState();
   const { setGuideVolume, handlePause } = usePlaybackTransportActions();
+  const { phraseLoopEnabled } = usePlaybackTranscriptState();
+  const { togglePhraseLoop } = usePlaybackTranscriptActions();
   const { micUserEnabled, micName, micMonitorUserEnabled } = usePlaybackMicState();
   const { handleToggleMic, handleCycleMic, handleToggleMicMonitor } = usePlaybackMicActions();
   const { themeIndex, videoFlavor } = usePlaybackThemeState();
@@ -183,7 +187,6 @@ function TouchControls({
           micMonitorUserEnabled={micMonitorUserEnabled}
           themeIndex={themeIndex}
           videoFlavor={videoFlavor}
-          showShortcuts={false}
         />
       </div>
 
@@ -223,6 +226,10 @@ function TouchControls({
           />
           <TouchButton label="Theme" onClick={cycleTheme} />
           <TouchButton
+            label={phraseLoopEnabled ? "Loop Off" : "Loop Phrase"}
+            onClick={togglePhraseLoop}
+          />
+          <TouchButton
             label="Flavor"
             onClick={cycleFlavor}
             disabled={!isPixabayTheme(themeIndex)}
@@ -250,7 +257,7 @@ function Disclaimer({
   if (noStems && micActive) {
     return (
       <DisclaimerNote position={position}>
-        Original mix is used, so pitch scoring will likely be inaccurate
+        Free sing and recording are available; strict scoring needs a melody guide
       </DisclaimerNote>
     );
   }
@@ -299,10 +306,27 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
   const { duration, guideVolume, guideAvailable } = usePlaybackTransportState();
   const { subscribe, getCurrentTime } = usePlaybackTransportActions();
   const { themeIndex, videoFlavor } = usePlaybackThemeState();
-  const { firstSegmentStart, lastSegmentEnd, introSkipLeadSec, transcriptSource } =
-    usePlaybackTranscriptState();
-  const { handleSkipIntro, handleSkipOutro } = usePlaybackTranscriptActions();
-  const { pitchScore, micUserEnabled, micName, micMonitorUserEnabled } = usePlaybackMicState();
+  const {
+    firstSegmentStart,
+    lastSegmentEnd,
+    introSkipLeadSec,
+    transcriptSource,
+    phraseLoopEnabled,
+  } = usePlaybackTranscriptState();
+  const { handleSkipIntro, handleSkipOutro, togglePhraseLoop } = usePlaybackTranscriptActions();
+  const {
+    pitchScore,
+    micUserEnabled,
+    micName,
+    micMonitorUserEnabled,
+    micReady,
+    melody,
+    performance,
+    feedbackMode,
+    recordingWanted,
+    recordingStatus,
+  } = usePlaybackMicState();
+  const { setFeedbackMode, handleToggleRecording } = usePlaybackMicActions();
 
   const lastSecondRef = useRef(-1);
   const timerRef = useRef<HTMLParagraphElement>(null);
@@ -369,8 +393,63 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
         </div>
 
         <div className={`flex min-w-0 items-end ${hudFlowClass}`}>
-          <div className={`text-base md:text-lg ${pitchScore ? "text-white" : "text-white/50"}`}>
-            Score: {pitchScore ?? "--"}
+          <div className="pointer-events-auto mb-1 flex items-center gap-1 border border-white/20 bg-black/45 p-1">
+            <button
+              type="button"
+              title={phraseLoopEnabled ? "Stop phrase loop" : "Loop current phrase"}
+              aria-pressed={phraseLoopEnabled}
+              onClick={togglePhraseLoop}
+              className={`flex size-8 items-center justify-center transition-colors ${
+                phraseLoopEnabled ? "bg-cyan-400 text-black" : "text-white/75 hover:bg-white/10"
+              }`}
+            >
+              <Repeat2 className="size-4" />
+            </button>
+            <button
+              type="button"
+              title="Coach feedback"
+              aria-pressed={feedbackMode === "coach"}
+              onClick={() => setFeedbackMode("coach")}
+              className={`flex h-8 items-center gap-1 px-2 text-xs transition-colors ${
+                feedbackMode === "coach" ? "bg-white text-black" : "text-white/75 hover:bg-white/10"
+              }`}
+            >
+              <GraduationCap className="size-4" /> Coach
+            </button>
+            <button
+              type="button"
+              title="Game feedback"
+              aria-pressed={feedbackMode === "game"}
+              onClick={() => setFeedbackMode("game")}
+              className={`flex h-8 items-center gap-1 px-2 text-xs transition-colors ${
+                feedbackMode === "game" ? "bg-white text-black" : "text-white/75 hover:bg-white/10"
+              }`}
+            >
+              <Gamepad2 className="size-4" /> Game
+            </button>
+            <button
+              type="button"
+              title={recordingWanted ? "Stop vocal recording" : "Start vocal recording"}
+              aria-pressed={recordingWanted}
+              onClick={handleToggleRecording}
+              className={`flex size-8 items-center justify-center transition-colors ${
+                recordingWanted ? "bg-red-600 text-white" : "text-white/75 hover:bg-white/10"
+              }`}
+            >
+              {recordingWanted ? <Square className="size-3.5" /> : <Circle className="size-4" />}
+            </button>
+          </div>
+          <div
+            className={`text-base md:text-lg ${micReady && melody?.strict_scoring_available ? "text-white" : "text-white/50"}`}
+          >
+            Score:{" "}
+            {micReady && melody?.strict_scoring_available
+              ? performance.overall
+              : (pitchScore ?? "--")}
+          </div>
+          <div className="flex items-center gap-1 text-xs text-white/55">
+            {recordingWanted && <Circle className="size-2 fill-red-500 text-red-500" />}
+            <span>{recordingStatus === "off" ? "Recording off" : recordingStatus}</span>
           </div>
           <div className="hidden sm:block">
             <SettingsInfo
@@ -381,7 +460,6 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
               micMonitorUserEnabled={micMonitorUserEnabled}
               themeIndex={themeIndex}
               videoFlavor={videoFlavor}
-              showShortcuts={!hasTouch}
             />
           </div>
           <TouchControls config={config} hasTouch={hasTouch} position={position} />

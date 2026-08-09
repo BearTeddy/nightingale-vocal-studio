@@ -1,11 +1,13 @@
 import { ClearCacheDialog } from "@/components/menu/dialogs/clear-cache";
 import { DonateDialog } from "@/components/menu/dialogs/donate";
 import { EditLyricsDialog } from "@/components/menu/dialogs/edit-lyrics";
+import { MelodyEditorDialog } from "@/components/menu/dialogs/melody-editor";
 import { ExitDialog } from "@/components/menu/dialogs/exit";
 import { InfoDialog } from "@/components/menu/dialogs/info";
 import { JellyfinConnectDialog } from "@/components/menu/dialogs/remote-source/jellyfin-connect";
 import { NavidromeConnectDialog } from "@/components/menu/dialogs/remote-source/navidrome-connect";
 import { PlexConnectDialog } from "@/components/menu/dialogs/remote-source/plex-connect";
+import { YouTubeImportDialog } from "@/components/menu/dialogs/youtube-import";
 import { SelectLanguageDialog } from "@/components/menu/dialogs/language";
 import { CreateProfileDialog } from "@/components/menu/dialogs/profile/create";
 import { SelectProfileDialog } from "@/components/menu/dialogs/profile/select";
@@ -73,10 +75,12 @@ export const MenuLayout = () => {
       <DonateDialog />
       <SelectLanguageDialog />
       <EditLyricsDialog />
+      <MelodyEditorDialog />
       <ClearCacheDialog />
       <JellyfinConnectDialog />
       <NavidromeConnectDialog />
       <PlexConnectDialog />
+      <YouTubeImportDialog />
       <Setup />
       <SidebarInset>
         <Outlet />

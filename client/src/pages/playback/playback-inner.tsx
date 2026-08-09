@@ -71,9 +71,16 @@ function PlaybackLayout({ song, config }: PlaybackLayoutProps) {
       <ResultDialog
         open={result.open}
         score={result.score}
+        performance={result.performance}
+        performanceSeries={result.performanceSeries}
+        melody={result.melody}
+        recordingTake={result.recordingTake}
+        recordingStatus={result.recordingStatus}
         song={song}
         scores={result.scores}
         activeProfile={result.activeProfile}
+        personalBest={result.personalBest}
+        recordingError={result.recordingError}
         onFinish={result.onFinish}
       />
     </div>

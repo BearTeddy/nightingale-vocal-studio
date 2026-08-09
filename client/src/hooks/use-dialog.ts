@@ -13,8 +13,10 @@ export type DialogMode =
   | "jellyfin-connect"
   | "navidrome-connect"
   | "plex-connect"
+  | "youtube-import"
   | { mode: "language"; song: Song }
   | { mode: "edit-lyrics"; song: Song }
+  | { mode: "edit-melody"; song: Song }
   | { mode: "clear-cache"; target: ClearCacheTarget }
   | null;
 

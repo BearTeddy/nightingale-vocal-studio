@@ -3,7 +3,7 @@ import { useContext, useEffect, useRef } from "react";
 
 export type { NavAction };
 
-export function useNavInput(handler: (action: NavAction) => void) {
+export function useNavInput(handler: (action: NavAction) => boolean | void) {
   const ctx = useContext(NavInputContext);
   const handlerRef = useRef(handler);
   handlerRef.current = handler;

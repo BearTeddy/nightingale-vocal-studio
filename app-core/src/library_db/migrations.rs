@@ -24,7 +24,7 @@ use crate::song::{Song, SongOrigin};
 use super::connection::{with_conn, with_conn_mut};
 use super::songs::{append_songs, update_library_meta};
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 4;
 
 static MIGRATING: AtomicBool = AtomicBool::new(false);
 static MIGRATION_TOTAL: AtomicUsize = AtomicUsize::new(0);
@@ -123,6 +123,42 @@ pub(super) fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
             CREATE INDEX IF NOT EXISTS idx_playlist_songs_song
                 ON playlist_songs(song_id);
         ",
+        )?;
+    }
+    if v < 3 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS practice_sessions (
+                id TEXT PRIMARY KEY,
+                profile TEXT NOT NULL,
+                song_hash TEXT,
+                kind TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                performance_json TEXT,
+                recording_take_id TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_practice_sessions_profile_time
+                ON practice_sessions(profile, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS recording_takes (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                song_hash TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recording_takes_profile_time
+                ON recording_takes(profile, created_at DESC);
+        ",
+        )?;
+    }
+    if v < 4 {
+        conn.execute_batch(
+            "ALTER TABLE practice_sessions
+             ADD COLUMN transport_json TEXT NOT NULL DEFAULT '[]';",
         )?;
     }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;

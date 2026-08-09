@@ -10,7 +10,7 @@ import {
   REF_RMS_GATE,
 } from "./constants";
 
-function rms(samples: ArrayLike<number>): number {
+export function samplesRms(samples: ArrayLike<number>): number {
   if (samples.length === 0) return 0;
   let sum = 0;
   for (let i = 0; i < samples.length; i++) {
@@ -38,7 +38,7 @@ export function detectPitchFromSamplesRef(
   if (samples.length !== PITCH_WINDOW_SAMPLES) {
     throw new Error(`Expected ${PITCH_WINDOW_SAMPLES} samples`);
   }
-  if (rms(samples) < REF_RMS_GATE) {
+  if (samplesRms(samples) < REF_RMS_GATE) {
     return null;
   }
   const [hz, clarity] = detector.findPitch(samples, sampleRate);
@@ -59,7 +59,7 @@ export function detectPitchFromSamplesMic(
   if (samples.length !== PITCH_WINDOW_SAMPLES) {
     throw new Error(`Expected ${PITCH_WINDOW_SAMPLES} samples`);
   }
-  if (rms(samples) < MIC_RMS_GATE) {
+  if (samplesRms(samples) < MIC_RMS_GATE) {
     return null;
   }
   const [hz, clarity] = detector.findPitch(samples, sampleRate);
@@ -70,4 +70,32 @@ export function detectPitchFromSamplesMic(
     return null;
   }
   return hz;
+}
+
+export function samplesPeak(samples: ArrayLike<number>): number {
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    peak = Math.max(peak, Math.abs(samples[i]));
+  }
+  return peak;
+}
+
+export function detectMicPitchDetails(
+  detector: PitchDetector<Float32Array>,
+  samples: Float32Array,
+  sampleRate: number,
+): { hz: number | null; clarity: number; rms: number; peak: number } {
+  if (samples.length !== PITCH_WINDOW_SAMPLES) {
+    throw new Error(`Expected ${PITCH_WINDOW_SAMPLES} samples`);
+  }
+  const level = samplesRms(samples);
+  const peak = samplesPeak(samples);
+  if (level < MIC_RMS_GATE) {
+    return { hz: null, clarity: 0, rms: level, peak };
+  }
+  const [hz, clarity] = detector.findPitch(samples, sampleRate);
+  if (hz <= 0 || clarity < MIC_PITCH_CLARITY_THRESHOLD || hz < MIN_PITCH_HZ || hz > MAX_PITCH_HZ) {
+    return { hz: null, clarity, rms: level, peak };
+  }
+  return { hz, clarity, rms: level, peak };
 }

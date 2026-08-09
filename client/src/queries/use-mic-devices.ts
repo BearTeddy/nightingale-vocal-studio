@@ -19,11 +19,12 @@ async function listMicDevices(adapter: MicrophoneAdapter): Promise<MicDevice[]> 
 }
 
 export function useMicDevices(adapter: MicrophoneAdapter = microphoneAdapter) {
-  return useQuery({
+  const { data } = useQuery({
     queryKey: MIC_DEVICES,
     queryFn: () => listMicDevices(adapter),
     staleTime: MIC_DEVICE_CACHE_MS,
     cacheTime: MIC_DEVICE_CACHE_MS,
-    initialData: [],
-  }).data;
+  });
+
+  return data ?? [];
 }

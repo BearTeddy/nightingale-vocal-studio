@@ -17,11 +17,27 @@
 
 ---
 
+> [!IMPORTANT]
+> This repository is an independently modified fork of
+> [rzru/nightingale](https://github.com/rzru/nightingale). It keeps the upstream
+> GPL-3.0-or-later license and adds the Nightingale Vocal Studio, local YouTube
+> importing, melody extraction and correction, strict pitch coaching, and vocal
+> recording/export workflows. See [FORK.md](FORK.md) for attribution, branding,
+> and packaging details.
+
 Nightingale scans your music folder, Plex Media Server, Jellyfin server, Navidrome server, or self-hosted web library; separates lead vocals from instrumentals using the [UVR Karaoke model](https://github.com/Anjok07/ultimatevocalremovergui) (or [Demucs](https://github.com/facebookresearch/demucs)); transcribes lyrics with word-level timestamps via [WhisperX](https://github.com/m-bain/whisperX); and plays it all back with synchronized highlighting, pitch scoring, key/tempo controls, profiles, and dynamic backgrounds.
 
 Ships as a single binary. No manual installation of Python, ffmpeg, or ML models required — everything is downloaded and bootstrapped automatically on first launch.
 
 ## Features
+
+### Vocal Studio fork additions
+
+- **YouTube and playlist import** with highest-quality media selection, Unicode-safe metadata, and automatic library naming.
+- **JOYSOUND-style pitch highway** with strict octave-aware scoring, phrase feedback, Coach and Game modes, and editable melody maps.
+- **Vocal Studio** with microphone checkup, full vocal-range references, adaptive pitch and ear-training exercises, song-phrase loops, and practice history.
+- **Local vocal recording** with 24-bit dry masters, synchronized performance mixes, recoverable sessions, and optional M4A or MP4 export.
+- **Windows-first setup** with a configurable data directory, Desktop shortcuts, and automatic first-run provisioning of the analyzer runtime.
 
 ### Library & sources
 
@@ -92,6 +108,8 @@ On macOS and Windows, Nightingale checks for new releases once at launch. When o
 Auto-update is **not supported on Linux** — the app ships without the updater plugin. The **Update** entry still appears in the sidebar menu, but it just opens a dialog explaining this with a one-click button to the [Releases](../../releases) page so you can grab the new `.deb` or `.rpm` and install it the usual way for your distro.
 
 ### macOS
+
+The manual **Installer builds** workflow creates separate `.dmg` installers for Apple Silicon and Intel Macs without requiring release-signing secrets. Open the workflow in GitHub Actions, choose **Run workflow**, then download the artifact matching the Mac's processor.
 
 macOS quarantines files downloaded from the internet. Since Nightingale isn't signed with an Apple Developer ID, Gatekeeper will block it with a message like _"app is damaged and can't be opened"_. To fix this, remove the quarantine attribute after moving the Nightingale.app to Applications:
 
@@ -222,6 +240,10 @@ cargo desktop dev
 cargo desktop build
 ```
 
+Local builds omit signed updater archives when `TAURI_SIGNING_PRIVATE_KEY` is unavailable, so the
+installer command still exits successfully. Tagged GitHub releases keep updater artifacts enabled
+and sign them with the repository secret.
+
 ## Supported platforms
 
 | Platform       | Target                      |
@@ -245,6 +267,8 @@ Releases are cut by [`.github/workflows/release.yml`](.github/workflows/release.
    - Windows x86_64: `*-setup.exe` (NSIS, + `.sig`), `*_en-US.msi` (+ `.sig`)
    - `latest.json` covering `darwin-aarch64`, `darwin-x86_64`, and `windows-x86_64` — Linux is intentionally absent since the updater plugin isn't compiled in for Linux.
 4. Leaves the release as a draft. Smoke-test the artifacts from the draft, then flip it to **Published** with the "Set as the latest release" checkbox in the GitHub Releases UI to make `https://github.com/rzru/nightingale/releases/latest/download/latest.json` (the URL hard-coded in [`tauri.conf.json`](client/src-tauri/tauri.conf.json)) resolve to it and start rolling out the in-app update.
+
+For test installers without updater or Apple signing keys, run [`.github/workflows/installers.yml`](.github/workflows/installers.yml) manually. It uploads Apple Silicon and Intel `.dmg` files plus a Windows NSIS `.exe`, each with a SHA-256 checksum.
 
 Cutting a release:
 

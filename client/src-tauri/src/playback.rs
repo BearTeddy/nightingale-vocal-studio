@@ -7,6 +7,23 @@ pub fn load_transcript(file_hash: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+pub fn load_melody_map(file_hash: String) -> Option<app_core::MelodyMap> {
+    app_core::load_melody_map(&file_hash)
+}
+
+#[tauri::command]
+pub fn save_melody_map(file_hash: String, melody: app_core::MelodyMap) -> Result<(), String> {
+    app_core::save_melody_map(&file_hash, melody)
+}
+
+#[tauri::command]
+pub async fn rebuild_melody_map(file_hash: String) -> Result<app_core::MelodyMap, String> {
+    tauri::async_runtime::spawn_blocking(move || app_core::rebuild_melody_map(&file_hash))
+        .await
+        .map_err(|error| format!("Pitch-guide task failed: {error}"))?
+}
+
+#[tauri::command]
 pub fn get_audio_paths(file_hash: String) -> AudioPaths {
     app_core::get_audio_paths(&file_hash)
 }

@@ -2,6 +2,7 @@ import type { Song } from "@/types/Song";
 import {
   AlignLeftIcon,
   AudioLinesIcon,
+  AudioWaveform,
   LanguagesIcon,
   MicIcon,
   PencilLineIcon,
@@ -29,6 +30,7 @@ interface BuildActionGroupsParams {
   supportsAnalysisActions: boolean;
   analysis: AnalysisHandlers;
   onEditLyrics: () => void;
+  onEditMelody: () => void;
   onChangeLanguage: () => void;
   run: (message: string, action: () => void | Promise<void>) => () => Promise<void>;
 }
@@ -40,6 +42,7 @@ export function buildActionGroups({
   supportsAnalysisActions,
   analysis,
   onEditLyrics,
+  onEditMelody,
   onChangeLanguage,
   run,
 }: BuildActionGroupsParams): ActionItemProps[][] {
@@ -69,6 +72,17 @@ export function buildActionGroups({
     }
 
     groups.push(notReadyGroup);
+  }
+
+  if (status.isReady) {
+    groups.push([
+      {
+        icon: AudioWaveform,
+        title: "Edit pitch guide",
+        description: "Correct target notes, pitch, timing, and scoring eligibility.",
+        onClick: onEditMelody,
+      },
+    ]);
   }
 
   if (supportsAnalysisActions) {

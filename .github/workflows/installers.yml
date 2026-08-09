@@ -1,0 +1,118 @@
+name: Installer builds
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.label }} DMG
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Apple Silicon
+            target: aarch64-apple-darwin
+          - label: Intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: installer-${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Build unsigned DMG
+        working-directory: client
+        run: >-
+          pnpm tauri build
+          --target ${{ matrix.target }}
+          --bundles dmg
+          --config src-tauri/tauri.local.conf.json
+
+      - name: Write checksum
+        working-directory: target/${{ matrix.target }}/release/bundle/dmg
+        run: shasum -a 256 *.dmg > SHA256SUMS.txt
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nightingale-macOS-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/dmg/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows x64 installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: installer-windows-x64
+
+      - name: Install frontend dependencies
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Build unsigned NSIS installer
+        working-directory: client
+        run: >-
+          pnpm tauri build
+          --bundles nsis
+          --config src-tauri/tauri.local.conf.json
+
+      - name: Write checksum
+        shell: pwsh
+        run: |
+          $directory = "target/release/bundle/nsis"
+          Get-ChildItem -LiteralPath $directory -Filter "*.exe" | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii "$directory/SHA256SUMS.txt"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nightingale-Windows-x64
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

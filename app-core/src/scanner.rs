@@ -5,6 +5,7 @@
 //!  - spawning the scan thread
 //!  - exposing `SongsStore` load/load_meta entry points used by the bridge
 
+use std::path::PathBuf;
 use tracing::warn;
 
 use crate::{
@@ -46,6 +47,16 @@ impl SongsStore {
 /// Trigger a scan using whatever `LibrarySource` is currently configured.
 /// Returns immediately; the scan runs on a background thread.
 pub fn start_scan() {
+    start_scan_internal(Vec::new());
+}
+
+/// Scan the active source and queue only the newly imported local files even
+/// when the user's global auto-analysis preference is disabled.
+pub fn start_scan_and_analyze(imported_paths: Vec<PathBuf>) {
+    start_scan_internal(imported_paths);
+}
+
+fn start_scan_internal(imported_paths: Vec<PathBuf>) {
     let scan_generation = library_db::bump_scan_generation();
 
     let source = match active_source_from_config(&AppConfig::load()) {
@@ -84,10 +95,27 @@ pub fn start_scan() {
             return;
         }
 
-        if library_db::scan_generation_is_current(scan_generation)
-            && AppConfig::load().auto_analyze()
-        {
+        if !library_db::scan_generation_is_current(scan_generation) {
+            return;
+        }
+
+        if AppConfig::load().auto_analyze() {
             analyzer::enqueue_all(&LibraryMenuFilters::default());
+            return;
+        }
+
+        if !imported_paths.is_empty() {
+            for song in library_db::load_all_songs().unwrap_or_default() {
+                if song.is_analyzed {
+                    continue;
+                }
+                if imported_paths
+                    .iter()
+                    .any(|path| crate::cache::same_path(path, &song.path))
+                {
+                    analyzer::enqueue_one(&song.file_hash);
+                }
+            }
         }
     });
 }

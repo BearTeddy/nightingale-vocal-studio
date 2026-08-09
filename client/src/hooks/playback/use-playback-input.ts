@@ -22,8 +22,14 @@ export function usePlaybackInput(config: AppConfig | null) {
     usePlaybackTransportActions();
   const { cycleTheme, cycleFlavor } = usePlaybackThemeActions();
   const { firstSegmentStart, lastSegmentEnd, introSkipLeadSec } = usePlaybackTranscriptState();
-  const { handleSkipIntro, handleSkipOutro } = usePlaybackTranscriptActions();
-  const { handleToggleMic, handleCycleMic, handleToggleMicMonitor } = usePlaybackMicActions();
+  const { handleSkipIntro, handleSkipOutro, togglePhraseLoop } = usePlaybackTranscriptActions();
+  const {
+    handleToggleMic,
+    handleCycleMic,
+    handleToggleMicMonitor,
+    handleToggleRecording,
+    setFeedbackMode,
+  } = usePlaybackMicActions();
 
   const persistConfig = usePlaybackConfigPersist(config);
 
@@ -45,6 +51,15 @@ export function usePlaybackInput(config: AppConfig | null) {
 
         if (pausedRef.current) return;
 
+        if (action.left) {
+          setFeedbackMode("coach");
+          return;
+        }
+        if (action.right) {
+          setFeedbackMode("game");
+          return;
+        }
+
         if (action.confirm) {
           if (!isReady) return;
           const t = getCurrentTime();
@@ -65,6 +80,7 @@ export function usePlaybackInput(config: AppConfig | null) {
         introSkipLeadSec,
         handleSkipIntro,
         handleSkipOutro,
+        setFeedbackMode,
       ],
     ),
   );
@@ -135,6 +151,26 @@ export function usePlaybackInput(config: AppConfig | null) {
         case "R":
           handleToggleMicMonitor();
           break;
+
+        case "l":
+        case "L":
+          togglePhraseLoop();
+          break;
+
+        case "c":
+        case "C":
+          setFeedbackMode("coach");
+          break;
+
+        case "v":
+        case "V":
+          setFeedbackMode("game");
+          break;
+
+        case "k":
+        case "K":
+          handleToggleRecording();
+          break;
       }
     };
 
@@ -153,5 +189,8 @@ export function usePlaybackInput(config: AppConfig | null) {
     handleToggleMic,
     handleCycleMic,
     handleToggleMicMonitor,
+    handleToggleRecording,
+    setFeedbackMode,
+    togglePhraseLoop,
   ]);
 }

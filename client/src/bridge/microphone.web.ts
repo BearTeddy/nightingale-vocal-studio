@@ -53,6 +53,7 @@ interface ActiveCapture {
 let active: ActiveCapture | null = null;
 let workletUrl: string | null = null;
 let liveMonitorGain = DEFAULT_MONITOR_GAIN;
+let sampleIndex = 0;
 
 const ensureWorkletUrl = (): string => {
   if (workletUrl !== null) return workletUrl;
@@ -170,11 +171,13 @@ const startCapture = async (
     const samples = event.data;
     const frame: MicSampleFrame = {
       sample_rate: context.sampleRate,
+      sample_index: sampleIndex,
       // `MicSampleFrame.samples` is generated as `Array<number>` (ts-rs);
       // copy into a real Array so consumers reading `.length` / `[i]` don't
       // depend on Float32Array's surface.
       samples: Array.from(samples) as unknown as number[],
     };
+    sampleIndex += samples.length;
     dispatchMicFrame(frame);
   };
 
@@ -196,6 +199,7 @@ const startCapture = async (
     monitorGain,
     emitAudio: options.emit_audio,
   };
+  sampleIndex = 0;
 
   const track = stream.getAudioTracks()[0];
   return track?.label || preferred || "default";

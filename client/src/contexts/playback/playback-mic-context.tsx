@@ -13,7 +13,26 @@ import { usePitchScoring } from "@/hooks/use-pitch-scoring";
 import { usePlaybackConfigPersist } from "@/hooks/playback/use-playback-config-persist";
 import { DEFAULT_MIC_LATENCY_COMPENSATION_SEC } from "@/lib/pitch/constants";
 import type { PitchSeries } from "@/lib/pitch/state";
+import { transformMelodyMap } from "@/lib/pitch/melody";
+import { planRecordingAttachment } from "@/lib/recording-sync";
+import { shouldAutoExportRecording } from "@/lib/recording-recovery";
+import { loadMelodyMap } from "@/bridge/playback";
+import {
+  exportRecording,
+  getVocalRecordingStatus,
+  pauseVocalRecording,
+  resumeVocalRecording,
+  savePracticeSession,
+  startVocalRecording,
+  stopVocalRecording,
+} from "@/bridge/recording";
 import type { AppConfig } from "@/types/AppConfig";
+import type { MelodyMap } from "@/types/MelodyMap";
+import type { PerformanceScore } from "@/types/PerformanceScore";
+import type { PitchFrame } from "@/types/PitchFrame";
+import type { RecordingTake } from "@/types/RecordingTake";
+import type { TransportSegment } from "@/types/TransportSegment";
+import { useProfiles } from "@/queries/use-profiles";
 import {
   createContext,
   useCallback,
@@ -29,6 +48,7 @@ import {
   usePlaybackTransportActions,
   usePlaybackTransportState,
 } from "./playback-transport-context";
+import type { TransportEvent } from "./playback-transport-context";
 
 export interface PlaybackMicState {
   micUserEnabled: boolean;
@@ -41,6 +61,25 @@ export interface PlaybackMicState {
   micCaptureActive: boolean;
   micPitchActive: boolean;
   micReady: boolean;
+  latestFrame: PitchFrame | null;
+  melody: MelodyMap | null;
+  performance: PerformanceScore;
+  performanceSeries: PitchSeries;
+  recordingWanted: boolean;
+  recordingStatus:
+    | "off"
+    | "arming"
+    | "recording"
+    | "paused"
+    | "finalizing"
+    | "exporting-video"
+    | "ready"
+    | "failed";
+  recordingTake: RecordingTake | null;
+  recordingError: string | null;
+  vocalGain: number;
+  videoExportAvailable: boolean;
+  feedbackMode: "coach" | "game";
 }
 
 export interface PlaybackMicActions {
@@ -48,19 +87,41 @@ export interface PlaybackMicActions {
   handleToggleMic: () => void;
   handleCycleMic: () => void;
   handleToggleMicMonitor: () => void;
+  handleToggleRecording: () => void;
+  setVocalGain: (gain: number) => void;
+  renderRecordingMix: () => void;
+  retryRecordingExport: () => void;
+  exportRecordingVideo: () => void;
+  setFeedbackMode: (mode: "coach" | "game") => void;
 }
 
 const MicStateContext = createContext<PlaybackMicState | null>(null);
 const MicActionsContext = createContext<PlaybackMicActions | null>(null);
 
 interface PlaybackMicProviderProps {
+  fileHash: string;
+  title: string;
+  artist: string;
+  videoPath: string | null;
+  keyOffset: number;
+  tempo: number;
   config: AppConfig | null;
   children: ReactNode;
 }
 
-export function PlaybackMicProvider({ config, children }: PlaybackMicProviderProps) {
-  const { isReady, isPlaying, paused, duration } = usePlaybackTransportState();
-  const { subscribe, getScoringBuffer } = usePlaybackTransportActions();
+export function PlaybackMicProvider({
+  fileHash,
+  title,
+  artist,
+  videoPath,
+  keyOffset,
+  tempo,
+  config,
+  children,
+}: PlaybackMicProviderProps) {
+  const { isReady, isPlaying, isFinished, paused, duration } = usePlaybackTransportState();
+  const { subscribe, subscribeTransportEvents, getCurrentTime, getVocalsBuffer } =
+    usePlaybackTransportActions();
 
   const persistConfig = usePlaybackConfigPersist(config);
 
@@ -69,12 +130,65 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
     config?.mic_monitoring ?? false,
   );
   const [selectedMicId, setSelectedMicId] = useState<string | null>(config?.preferred_mic ?? null);
+  const [melody, setMelody] = useState<MelodyMap | null>(null);
+  const { data: profiles } = useProfiles();
+  const [recordingWanted, setRecordingWanted] = useState(true);
+  const [recordingStatus, setRecordingStatus] =
+    useState<PlaybackMicState["recordingStatus"]>("off");
+  const [recordingTake, setRecordingTake] = useState<RecordingTake | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [vocalGain, setVocalGainState] = useState(1);
+  const [feedbackMode, setFeedbackMode] = useState<"coach" | "game">("coach");
+  const [performanceSeries, setPerformanceSeries] = useState<PitchSeries>({
+    refPitches: [],
+    userPitches: [],
+    similarities: [],
+    timestamps: [],
+  });
+  const recordingStartedRef = useRef(false);
+  const recordingStartTimeRef = useRef(Math.floor(Date.now() / 1000));
+  const recordingTakeRef = useRef<RecordingTake | null>(null);
+  const recordingStatusRef = useRef<PlaybackMicState["recordingStatus"]>("off");
+  const vocalGainRef = useRef(1);
+  const openSegmentRef = useRef<{ sourceStart: number; recordedStart: number } | null>(null);
+  const transportSegmentsRef = useRef<TransportSegment[]>([]);
+  const transportQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const finalizingRef = useRef(false);
+  const sessionEndedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const finalizeRecordingRef = useRef(
+    async (_sourceEnd: number, _completion: "completed" | "interrupted") => {},
+  );
+  const performanceRef = useRef<PerformanceScore | null>(null);
+  const getPerformanceSeriesRef = useRef<() => PitchSeries>(() => ({
+    refPitches: [],
+    userPitches: [],
+    similarities: [],
+    timestamps: [],
+  }));
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadMelodyMap(fileHash)
+      .then((next) => {
+        if (!cancelled) setMelody(next ? transformMelodyMap(next, keyOffset, tempo) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setMelody(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fileHash, keyOffset, tempo]);
 
   const micDevices = useMicDevices();
 
   const micPitchEnabled = isReady && isPlaying && !paused && micUserEnabled;
   const micMonitorEnabled = isReady && isPlaying && !paused && micMonitorUserEnabled;
-  const captureEnabled = micPitchEnabled || micMonitorEnabled;
+  // Start capture while stems are loading so the recording can include a real
+  // pre-roll even on machines where playback becomes ready immediately.
+  const captureEnabled =
+    micUserEnabled && (recordingWanted || micPitchEnabled || micMonitorEnabled);
 
   const captureOptions = useMemo(() => ({ emit_audio: micMonitorEnabled }), [micMonitorEnabled]);
 
@@ -84,17 +198,319 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
     captureOptions,
   );
   const {
-    latestPitch,
+    latestFrame,
     active: micPitchActive,
     error: micPitchError,
   } = useMicPitch(micPitchEnabled);
   const reactiveRef = useMicReactive(micPitchEnabled);
 
-  const { series, score } = usePitchScoring(
-    { isReady, duration, getReferenceBuffer: getScoringBuffer, subscribe },
-    latestPitch,
+  const { series, score, performance, getPerformanceSeries } = usePitchScoring(
+    { isReady, duration, getReferenceBuffer: getVocalsBuffer, subscribe },
+    latestFrame,
+    melody,
     config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
   );
+  performanceRef.current = performance;
+  getPerformanceSeriesRef.current = getPerformanceSeries;
+  vocalGainRef.current = vocalGain;
+
+  const updateRecordingStatus = useCallback((status: PlaybackMicState["recordingStatus"]) => {
+    recordingStatusRef.current = status;
+    if (mountedRef.current) setRecordingStatus(status);
+  }, []);
+
+  const updateRecordingTake = useCallback((take: RecordingTake | null) => {
+    recordingTakeRef.current = take;
+    if (mountedRef.current) setRecordingTake(take);
+  }, []);
+
+  const recordedPosition = useCallback(async () => {
+    const status = await getVocalRecordingStatus();
+    return status.sample_rate > 0 ? status.captured_samples / status.sample_rate : 0;
+  }, []);
+
+  const closeOpenSegment = useCallback((sourceEnd: number, recordedEnd: number) => {
+    const open = openSegmentRef.current;
+    openSegmentRef.current = null;
+    if (!open) return;
+    const segment = {
+      source_start: Math.max(0, open.sourceStart),
+      source_end: Math.max(0, sourceEnd),
+      recorded_start: Math.max(0, open.recordedStart),
+      recorded_end: Math.max(0, recordedEnd),
+    };
+    if (
+      segment.source_end - segment.source_start >= 0.01 &&
+      segment.recorded_end - segment.recorded_start >= 0.01
+    ) {
+      transportSegmentsRef.current.push(segment);
+    }
+  }, []);
+
+  const finalizeRecordingNow = useCallback(
+    async (sourceEnd: number, completion: "completed" | "interrupted") => {
+      sessionEndedRef.current = true;
+      recordingStartedRef.current = false;
+      updateRecordingStatus("finalizing");
+      try {
+        await pauseVocalRecording();
+        const position = await recordedPosition();
+        closeOpenSegment(sourceEnd, position);
+        const take = await stopVocalRecording();
+        if (!take) {
+          updateRecordingStatus("off");
+          return;
+        }
+        updateRecordingTake(take);
+
+        const recordedDuration = take.recorded_samples / Math.max(1, take.sample_rate);
+        const segments = transportSegmentsRef.current
+          .map((segment) => ({
+            ...segment,
+            recorded_end: Math.min(segment.recorded_end, recordedDuration),
+          }))
+          .filter(
+            (segment) =>
+              segment.source_end > segment.source_start &&
+              segment.recorded_end > segment.recorded_start,
+          );
+        if (segments.length === 0 && recordedDuration > 0) {
+          segments.push({
+            source_start: take.playback_start_sec,
+            source_end: take.playback_start_sec + recordedDuration,
+            recorded_start: 0,
+            recorded_end: recordedDuration,
+          });
+        }
+
+        const scorePayload = performanceRef.current;
+        const completedSeries = getPerformanceSeriesRef.current();
+        if (mountedRef.current) setPerformanceSeries(completedSeries);
+        try {
+          await savePracticeSession({
+            id: take.session_id,
+            profile: take.profile,
+            song_hash: fileHash,
+            kind: "karaoke",
+            started_at: recordingStartTimeRef.current,
+            ended_at: Math.floor(Date.now() / 1000),
+            performance_json: JSON.stringify({
+              ...scorePayload,
+              completion,
+              mic_latency_compensation_sec:
+                config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+              pitch_series: completedSeries,
+            }),
+            recording_take_id: take.id,
+            transport_segments: segments,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (mountedRef.current) toast.error(`Session history: ${message}`);
+        }
+
+        if (!shouldAutoExportRecording(take.status)) {
+          const message = take.error ?? "The vocal recording is incomplete";
+          if (mountedRef.current) {
+            setRecordingError(message);
+            toast.error(`${message}. Your dry vocal is saved in History and can be recovered.`);
+          }
+          updateRecordingStatus("failed");
+          return;
+        }
+
+        try {
+          const exported = await exportRecording(
+            take.id,
+            config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+            vocalGainRef.current,
+            null,
+            segments,
+          );
+          updateRecordingTake(exported);
+          updateRecordingStatus("ready");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (mountedRef.current) {
+            setRecordingError(message);
+            toast.error(`Export: ${message}. Your dry vocal is still saved.`);
+          }
+          updateRecordingStatus("failed");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (mountedRef.current) {
+          setRecordingError(message);
+          toast.error(`Recording: ${message}`);
+        }
+        updateRecordingStatus("failed");
+      } finally {
+        finalizingRef.current = false;
+      }
+    },
+    [
+      closeOpenSegment,
+      config?.mic_latency_compensation_sec,
+      fileHash,
+      recordedPosition,
+      updateRecordingStatus,
+      updateRecordingTake,
+    ],
+  );
+  finalizeRecordingRef.current = finalizeRecordingNow;
+
+  const handleTransportEvent = useCallback(
+    async (event: TransportEvent) => {
+      if (!recordingStartedRef.current) return;
+      const terminal = event.type === "finish" || event.type === "exit";
+      if (!terminal && finalizingRef.current) return;
+      if (event.type === "pause") {
+        await pauseVocalRecording();
+        closeOpenSegment(event.sourceTime, await recordedPosition());
+        updateRecordingStatus("paused");
+        return;
+      }
+      if (event.type === "resume") {
+        openSegmentRef.current = {
+          sourceStart: event.sourceTime,
+          recordedStart: await recordedPosition(),
+        };
+        await resumeVocalRecording();
+        updateRecordingStatus("recording");
+        return;
+      }
+      if (event.type === "seek") {
+        await pauseVocalRecording();
+        const position = await recordedPosition();
+        closeOpenSegment(event.sourceTime, position);
+        if (event.playing) {
+          openSegmentRef.current = { sourceStart: event.targetTime, recordedStart: position };
+          await resumeVocalRecording();
+        }
+        return;
+      }
+      sessionEndedRef.current = true;
+      finalizingRef.current = true;
+      await finalizeRecordingNow(
+        event.sourceTime,
+        event.type === "finish" ? "completed" : "interrupted",
+      );
+    },
+    [closeOpenSegment, finalizeRecordingNow, recordedPosition, updateRecordingStatus],
+  );
+
+  useEffect(
+    () =>
+      subscribeTransportEvents((event) => {
+        if (
+          (event.type === "finish" || event.type === "exit") &&
+          recordingStartedRef.current &&
+          !finalizingRef.current
+        ) {
+          sessionEndedRef.current = true;
+          finalizingRef.current = true;
+        }
+        transportQueueRef.current = transportQueueRef.current
+          .then(() => handleTransportEvent(event))
+          .catch((error) => {
+            if (mountedRef.current) {
+              const message = error instanceof Error ? error.message : String(error);
+              setRecordingError(message);
+              updateRecordingStatus("failed");
+              toast.error(`Recording sync: ${message}`);
+            }
+          });
+      }),
+    [handleTransportEvent, subscribeTransportEvents, updateRecordingStatus],
+  );
+
+  useEffect(() => {
+    if (
+      !recordingWanted ||
+      !micUserEnabled ||
+      !micCaptureActive ||
+      !isPlaying ||
+      paused ||
+      sessionEndedRef.current ||
+      recordingStartedRef.current
+    ) {
+      return;
+    }
+    recordingStartedRef.current = true;
+    finalizingRef.current = false;
+    recorderOverrunShown.current = false;
+    transportSegmentsRef.current = [];
+    openSegmentRef.current = null;
+    setPerformanceSeries({ refPitches: [], userPitches: [], similarities: [], timestamps: [] });
+    recordingStartTimeRef.current = Math.floor(Date.now() / 1000);
+    updateRecordingStatus("arming");
+    setRecordingError(null);
+    const playbackStart = getCurrentTime();
+    transportQueueRef.current = transportQueueRef.current
+      .then(async () => {
+        const before = await getVocalRecordingStatus();
+        const take = await startVocalRecording({
+          song_hash: fileHash,
+          profile: profiles?.active ?? "Guest",
+          title,
+          artist,
+          playback_time_sec: playbackStart,
+        });
+        const after = await getVocalRecordingStatus();
+        const attachment = planRecordingAttachment(before, after, playbackStart, getCurrentTime());
+        if (attachment.resumeNativeRecorder) await resumeVocalRecording();
+        updateRecordingTake(take);
+        openSegmentRef.current = {
+          sourceStart: attachment.sourceStart,
+          recordedStart: attachment.recordedStart,
+        };
+        updateRecordingStatus("recording");
+      })
+      .catch((error) => {
+        recordingStartedRef.current = false;
+        const message = error instanceof Error ? error.message : String(error);
+        setRecordingError(message);
+        updateRecordingStatus("failed");
+        toast.error(`Recording: ${message}`);
+      });
+  }, [
+    artist,
+    fileHash,
+    getCurrentTime,
+    isPlaying,
+    micCaptureActive,
+    micUserEnabled,
+    paused,
+    profiles?.active,
+    recordingWanted,
+    title,
+    updateRecordingStatus,
+    updateRecordingTake,
+  ]);
+
+  useEffect(() => {
+    if (!isFinished || !recordingStartedRef.current || finalizingRef.current) return;
+    sessionEndedRef.current = true;
+    finalizingRef.current = true;
+    transportQueueRef.current = transportQueueRef.current.then(() =>
+      finalizeRecordingNow(duration || getCurrentTime(), "completed"),
+    );
+  }, [duration, finalizeRecordingNow, getCurrentTime, isFinished]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (recordingStartedRef.current && !finalizingRef.current) {
+        sessionEndedRef.current = true;
+        finalizingRef.current = true;
+        const sourceEnd = getCurrentTime();
+        transportQueueRef.current = transportQueueRef.current.then(() =>
+          finalizeRecordingRef.current(sourceEnd, "interrupted"),
+        );
+      }
+    };
+  }, [getCurrentTime]);
 
   const micErrorShown = useRef(false);
   useEffect(() => {
@@ -108,18 +524,50 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
     }
   }, [micCaptureError, micPitchError]);
 
+  const recorderOverrunShown = useRef(false);
+  useEffect(() => {
+    if (!recordingStartedRef.current || finalizingRef.current) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void getVocalRecordingStatus()
+        .then((status) => {
+          if (cancelled || recorderOverrunShown.current) return;
+          if (!status.overrun && !status.error) return;
+          recorderOverrunShown.current = true;
+          const message =
+            status.error ?? "Recording queue overrun; the dry vocal will be marked incomplete";
+          setRecordingError(message);
+          toast.error(message);
+        })
+        .catch(() => {});
+    }, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [recordingStatus]);
+
   const handleToggleMic = useCallback(() => {
     setMicUserEnabled((prev) => {
       const next = !prev;
+      if (!next && recordingStartedRef.current && !finalizingRef.current) {
+        sessionEndedRef.current = true;
+        finalizingRef.current = true;
+        const sourceEnd = getCurrentTime();
+        transportQueueRef.current = transportQueueRef.current.then(() =>
+          finalizeRecordingRef.current(sourceEnd, "interrupted"),
+        );
+      }
       if (!next && micMonitorUserEnabled) {
         setMicMonitorUserEnabled(false);
         persistConfig({ mic_active: false, mic_monitoring: false });
       } else {
+        if (next) sessionEndedRef.current = false;
         persistConfig({ mic_active: next });
       }
       return next;
     });
-  }, [persistConfig, micMonitorUserEnabled]);
+  }, [getCurrentTime, persistConfig, micMonitorUserEnabled]);
 
   const handleCycleMic = useCallback(() => {
     if (micDevices.length <= 1) return;
@@ -142,19 +590,142 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
     });
   }, [persistConfig, micUserEnabled]);
 
+  const handleToggleRecording = useCallback(() => {
+    setRecordingWanted((current) => {
+      const next = !current;
+      if (!next && recordingStartedRef.current && !finalizingRef.current) {
+        sessionEndedRef.current = true;
+        finalizingRef.current = true;
+        const sourceEnd = getCurrentTime();
+        transportQueueRef.current = transportQueueRef.current.then(() =>
+          finalizeRecordingRef.current(sourceEnd, "interrupted"),
+        );
+      } else if (next) {
+        sessionEndedRef.current = false;
+        finalizingRef.current = false;
+        updateRecordingStatus("off");
+        setRecordingError(null);
+      }
+      return next;
+    });
+  }, [getCurrentTime, updateRecordingStatus]);
+
+  const retryRecordingExport = useCallback(() => {
+    const take = recordingTakeRef.current;
+    if (!take || finalizingRef.current) return;
+    finalizingRef.current = true;
+    updateRecordingStatus("finalizing");
+    setRecordingError(null);
+    void exportRecording(
+      take.id,
+      config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+      vocalGainRef.current,
+      null,
+      transportSegmentsRef.current,
+    )
+      .then((exported) => {
+        updateRecordingTake(exported);
+        updateRecordingStatus("ready");
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setRecordingError(message);
+        updateRecordingStatus("failed");
+        toast.error(`Export: ${message}`);
+      })
+      .finally(() => {
+        finalizingRef.current = false;
+      });
+  }, [config?.mic_latency_compensation_sec, updateRecordingStatus, updateRecordingTake]);
+
+  const setVocalGain = useCallback((gain: number) => {
+    const next = Math.max(0, Math.min(2, gain));
+    vocalGainRef.current = next;
+    setVocalGainState(next);
+  }, []);
+
+  const renderRecordingMix = useCallback(() => {
+    const take = recordingTakeRef.current;
+    if (!take || finalizingRef.current) return;
+    finalizingRef.current = true;
+    updateRecordingStatus(take.video_path && videoPath ? "exporting-video" : "finalizing");
+    setRecordingError(null);
+    void exportRecording(
+      take.id,
+      config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+      vocalGainRef.current,
+      take.video_path && videoPath ? videoPath : null,
+      transportSegmentsRef.current,
+    )
+      .then((exported) => {
+        updateRecordingTake(exported);
+        updateRecordingStatus("ready");
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setRecordingError(message);
+        updateRecordingStatus("failed");
+        toast.error(`Mix export: ${message}`);
+      })
+      .finally(() => {
+        finalizingRef.current = false;
+      });
+  }, [config?.mic_latency_compensation_sec, updateRecordingStatus, updateRecordingTake, videoPath]);
+
+  const exportRecordingVideo = useCallback(() => {
+    const take = recordingTakeRef.current;
+    if (!take || !videoPath || finalizingRef.current) return;
+    finalizingRef.current = true;
+    updateRecordingStatus("exporting-video");
+    setRecordingError(null);
+    void exportRecording(
+      take.id,
+      config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+      vocalGainRef.current,
+      videoPath,
+      transportSegmentsRef.current,
+    )
+      .then((exported) => {
+        if (!exported.video_path) throw new Error("Video export did not create an MP4 file");
+        updateRecordingTake(exported);
+        updateRecordingStatus("ready");
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setRecordingError(message);
+        updateRecordingStatus("failed");
+        toast.error(`Video export: ${message}`);
+      })
+      .finally(() => {
+        finalizingRef.current = false;
+      });
+  }, [config?.mic_latency_compensation_sec, updateRecordingStatus, updateRecordingTake, videoPath]);
+
   const stateValue = useMemo<PlaybackMicState>(() => {
     const micReady = micCaptureActive && micPitchActive && micUserEnabled;
+    const strictScoringAvailable = melody?.strict_scoring_available === true;
     return {
       micUserEnabled,
       micMonitorUserEnabled,
       selectedMicId,
       micName: selectedMicId ?? "Default",
-      pitchScore: micReady ? score : null,
-      rawScore: score,
+      pitchScore: micReady && strictScoringAvailable ? score : null,
+      rawScore: strictScoringAvailable ? score : 0,
       series,
       micCaptureActive,
       micPitchActive,
       micReady,
+      latestFrame,
+      melody,
+      performance,
+      performanceSeries,
+      recordingWanted,
+      recordingStatus,
+      recordingTake,
+      recordingError,
+      vocalGain,
+      videoExportAvailable: videoPath != null,
+      feedbackMode,
     };
   }, [
     micUserEnabled,
@@ -164,6 +735,17 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
     series,
     micCaptureActive,
     micPitchActive,
+    latestFrame,
+    melody,
+    performance,
+    performanceSeries,
+    recordingWanted,
+    recordingStatus,
+    recordingTake,
+    recordingError,
+    vocalGain,
+    videoPath,
+    feedbackMode,
   ]);
 
   const actionsValue = useMemo<PlaybackMicActions>(
@@ -172,8 +754,25 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
       handleToggleMic,
       handleCycleMic,
       handleToggleMicMonitor,
+      handleToggleRecording,
+      setVocalGain,
+      renderRecordingMix,
+      retryRecordingExport,
+      exportRecordingVideo,
+      setFeedbackMode,
     }),
-    [reactiveRef, handleToggleMic, handleCycleMic, handleToggleMicMonitor],
+    [
+      reactiveRef,
+      handleToggleMic,
+      handleCycleMic,
+      handleToggleMicMonitor,
+      handleToggleRecording,
+      setVocalGain,
+      renderRecordingMix,
+      retryRecordingExport,
+      exportRecordingVideo,
+      setFeedbackMode,
+    ],
   );
 
   return (

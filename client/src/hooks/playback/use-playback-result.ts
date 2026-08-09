@@ -17,6 +17,15 @@ import { useProfiles } from "@/queries/use-profiles";
 import { addScore } from "@/bridge/profile";
 import type { ScoreRecord } from "@/types/ScoreRecord";
 import type { Song } from "@/types/Song";
+import type { PerformanceScore } from "@/types/PerformanceScore";
+import type { RecordingTake } from "@/types/RecordingTake";
+import type { MelodyMap } from "@/types/MelodyMap";
+import type { PitchSeries } from "@/lib/pitch/state";
+import {
+  personalBestForRun,
+  strictRawScore,
+  type PersonalBestComparison,
+} from "@/utils/playback/result";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
@@ -25,8 +34,15 @@ import { toast } from "sonner";
 export interface PlaybackResult {
   open: boolean;
   score: number;
+  performance: PerformanceScore;
+  performanceSeries: PitchSeries;
+  melody: MelodyMap | null;
+  recordingTake: RecordingTake | null;
+  recordingStatus: string;
+  recordingError: string | null;
   scores: ScoreRecord[];
   activeProfile: string | null;
+  personalBest: PersonalBestComparison | null;
   onFinish: () => void;
 }
 
@@ -38,15 +54,21 @@ export function usePlaybackResult(song: Song): PlaybackResult {
 
   const { isFinished } = usePlaybackTransportState();
   const { handleExit } = usePlaybackTransportActions();
-  const { rawScore } = usePlaybackMicState();
+  const {
+    performance,
+    performanceSeries,
+    melody,
+    recordingTake,
+    recordingStatus,
+    recordingError,
+  } = usePlaybackMicState();
   const { skipOutroPending } = usePlaybackTranscriptState();
   const { clearSkipOutroPending } = usePlaybackTranscriptActions();
 
   const [showResult, setShowResult] = useState(false);
   const [resultScore, setResultScore] = useState(0);
+  const [personalBest, setPersonalBest] = useState<PersonalBestComparison | null>(null);
 
-  const scoreRef = useRef(rawScore);
-  scoreRef.current = rawScore;
   const finishHandledRef = useRef(false);
 
   useEffect(() => {
@@ -65,9 +87,10 @@ export function usePlaybackResult(song: Song): PlaybackResult {
     finishHandledRef.current = true;
     clearSkipOutroPending();
 
-    const finalScore = scoreRef.current;
+    const finalScore = strictRawScore(melody, performance);
     const active = profileData?.active ?? null;
-    const shouldShowResult = finalScore > 0;
+    const shouldShowResult =
+      finalScore > 0 || recordingTake != null || recordingStatus !== "off";
 
     if (!shouldShowResult) {
       navigate("/", { replace: true });
@@ -76,11 +99,16 @@ export function usePlaybackResult(song: Song): PlaybackResult {
 
     void (async () => {
       try {
-        if (active != null) {
+        setPersonalBest(
+          active != null && finalScore > 0
+            ? personalBestForRun(profileData?.scores ?? [], fileHash, active, finalScore)
+            : null,
+        );
+        if (active != null && finalScore > 0) {
           await addScore(fileHash, finalScore);
           await queryClient.invalidateQueries({ queryKey: PROFILES });
         }
-        setResultScore(finalScore);
+        setResultScore(performance.overall);
         setShowResult(true);
       } catch (e) {
         toast.error(`Could not save score: ${e instanceof Error ? e.message : String(e)}`);
@@ -96,6 +124,11 @@ export function usePlaybackResult(song: Song): PlaybackResult {
     profilesLoading,
     queryClient,
     clearSkipOutroPending,
+    performance,
+    performanceSeries,
+    melody,
+    recordingStatus,
+    recordingTake,
   ]);
 
   useEffect(() => {
@@ -120,8 +153,15 @@ export function usePlaybackResult(song: Song): PlaybackResult {
   return {
     open: showResult,
     score: resultScore,
+    performance,
+    performanceSeries,
+    melody,
+    recordingTake,
+    recordingStatus,
+    recordingError,
     scores: profileData?.scores ?? [],
     activeProfile: profileData?.active ?? null,
+    personalBest,
     onFinish,
   };
 }

@@ -1,6 +1,7 @@
 mod analyzer;
 mod cache;
 mod config;
+mod desktop_shortcut;
 mod error;
 mod library_db;
 mod library_menu;
@@ -8,8 +9,10 @@ mod library_model;
 mod lrc;
 mod lyrics;
 pub mod media_server;
+mod melody;
 mod playback;
 mod profile;
+mod recording;
 mod scanner;
 mod secret;
 mod song;
@@ -17,6 +20,7 @@ mod source;
 mod usdx;
 mod vendor;
 mod vendor_scripts;
+mod youtube;
 
 pub use analyzer::{
     AnalysisQueue, delete_cache, enqueue_all, enqueue_one, realign, reanalyze_force_transcribe,
@@ -27,6 +31,7 @@ pub use cache::{
     clear_videos, default_nightingale_dir, nightingale_dir, normalized_target_path, same_path,
 };
 pub use config::{AppConfig, LibrarySource};
+pub use desktop_shortcut::ensure_data_shortcut;
 pub use library_db::{init_library, library_db_path};
 pub use library_menu::{LibraryMenuItem, LibraryMenuItems, load_library_menu_items};
 pub use library_model::{LibraryMenuFilters, LoadSongsParams, SongsMeta, SongsStore};
@@ -35,6 +40,7 @@ pub use lyrics::{
     save_lyrics_and_realign, search_lrclib_for_hash,
 };
 pub use media_server::MediaEndpoint;
+pub use melody::{MelodyMap, TargetNote, load_melody_map, rebuild_melody_map, save_melody_map};
 pub use playback::{
     AudioPaths, PixabayVideoDownloaded, ShiftDone, ShiftResult, StemsReady,
     download_pixabay_videos, ensure_mp3_stems, ensure_mp3_stems_ready_payload,
@@ -43,7 +49,13 @@ pub use playback::{
     shift_tempo_done_payload,
 };
 pub use profile::ProfileStore;
-pub use scanner::start_scan;
+pub use recording::{
+    ExportRecordingRequest, PracticeSession, RecordingRequest, RecordingTake, SavePracticeSession,
+    TransportSegment, export_recording, list_practice_sessions, load_recording_take,
+    new_exercise_session_id, prepare_recording, recover_partial_recordings, save_practice_session,
+    update_recording_take,
+};
+pub use scanner::{start_scan, start_scan_and_analyze};
 pub use song::SongOrigin;
 pub use source::{
     JellyfinAuth, JellyfinSource, MediaSource, NavidromeAuth, NavidromeSource, PlexAuth,
@@ -68,6 +80,7 @@ pub use vendor::{
     step_download_ffmpeg, step_download_uv, step_extract_scripts, step_install_packages,
     step_install_python,
 };
+pub use youtube::{YoutubeImportResult, import_youtube};
 
 pub fn startup() -> Result<(), String> {
     init_library().map_err(|e| e.to_string())?;
@@ -84,9 +97,16 @@ pub fn startup() -> Result<(), String> {
         tracing::warn!("Failed to refresh analyzer scripts: {e}");
     }
 
-    if AppConfig::load().auto_analyze() {
+    let config = AppConfig::load();
+    if let Err(error) = ensure_data_shortcut(&config.effective_data_path()) {
+        tracing::warn!("Failed to create Nightingale Desktop shortcut: {error}");
+    }
+
+    if config.auto_analyze() {
         analyzer::enqueue_all(&LibraryMenuFilters::default());
     }
+
+    recover_partial_recordings();
 
     Ok(())
 }
