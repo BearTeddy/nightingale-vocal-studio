@@ -37,6 +37,7 @@ import {
 import { buildListeningSession } from "@/lib/listening-session";
 import { recordingsDirectoryFromDataPath } from "@/lib/recording-path";
 import { canRecoverRecordingMix } from "@/lib/recording-recovery";
+import { diagnoseMicInput } from "@/lib/mic/input-diagnostic";
 import { DEFAULT_MIC_LATENCY_COMPENSATION_SEC } from "@/lib/pitch/constants";
 import { freqToSemitone, VisualPitchTracker } from "@/lib/pitch/state";
 import { createVocalFeedback } from "@/lib/vocal-feedback";
@@ -74,6 +75,7 @@ import { useConfig } from "@/queries/use-config";
 import { useMicDevices } from "@/queries/use-mic-devices";
 import { useProfiles } from "@/queries/use-profiles";
 import type { PracticeSession, SavePracticeSession } from "@/types/PracticeSession";
+import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { PitchFrame } from "@/types/PitchFrame";
 import type { RecordingTake } from "@/types/RecordingTake";
 import {
@@ -321,15 +323,20 @@ function scheduleTone(
 function SignalStrip({
   frame,
   active,
+  captureActive,
   targetMidi,
   error,
+  captureStatus,
 }: {
   frame: PitchFrame | null;
   active: boolean;
+  captureActive: boolean;
   targetMidi: number | null;
   error: string | null;
+  captureStatus: MicCaptureStatus | null;
 }) {
   const feedback = createVocalFeedback(frame, active, targetMidi);
+  const diagnostic = diagnoseMicInput(captureStatus, captureActive);
   const cents = feedback.cents == null ? null : Math.max(-100, Math.min(100, feedback.cents));
   const markerPosition = cents == null ? 50 : ((cents + 100) / 200) * 100;
   const onTarget = targetMidi != null && feedback.cents != null && Math.abs(feedback.cents) <= 25;
@@ -418,6 +425,41 @@ function SignalStrip({
             </span>
           </p>
         </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 border-t border-border text-xs sm:grid-cols-5">
+        {[
+          ["STREAM", diagnostic.label, diagnostic.detail],
+          [
+            "FORMAT",
+            captureStatus?.sample_rate
+              ? `${(captureStatus.sample_rate / 1000).toFixed(1)} kHz`
+              : "--",
+            "Native mono capture",
+          ],
+          [
+            "RMS",
+            diagnostic.rmsDb == null ? "--" : `${diagnostic.rmsDb.toFixed(1)} dB`,
+            "Current input energy",
+          ],
+          ["PEAK", `${diagnostic.peakPercent}%`, "Current input peak"],
+          [
+            "IPC",
+            captureStatus
+              ? `${captureStatus.sent_frames} / ${captureStatus.send_errors}`
+              : "-- / --",
+            "Frames / errors",
+          ],
+        ].map(([label, value, title]) => (
+          <div
+            key={label}
+            className="min-w-0 border-b border-border px-2 py-2 sm:border-b-0 sm:border-r last:border-r-0"
+          >
+            <p className="text-[0.625rem] text-muted-foreground">{label}</p>
+            <p className="mt-0.5 truncate font-medium tabular-nums" title={title}>
+              {value}
+            </p>
+          </div>
+        ))}
       </div>
       {error && (
         <p className="mt-3 text-sm text-destructive" role="alert">
@@ -1336,7 +1378,9 @@ export function VocalStudioPage() {
         <SignalStrip
           frame={displayPitchFrame}
           active={capture.active && pitchActive}
+          captureActive={capture.active}
           error={capture.error}
+          captureStatus={capture.status}
           targetMidi={
             checkupRunning
               ? checkupStage.targetMidi

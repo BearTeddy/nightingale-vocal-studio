@@ -1,4 +1,3 @@
-use cpal::device_description::DeviceType;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -114,20 +113,7 @@ pub struct MicCaptureOptions {
 }
 
 fn device_display_name(device: &cpal::Device) -> String {
-    let Ok(desc) = device.description() else {
-        return "(unknown)".into();
-    };
-    if let Some(friendly) = desc.extended().first() {
-        return friendly.clone();
-    }
-    desc.to_string()
-}
-
-fn is_virtual(device: &cpal::Device) -> bool {
-    let Ok(desc) = device.description() else {
-        return false;
-    };
-    matches!(desc.device_type(), DeviceType::Virtual)
+    device.name().unwrap_or_else(|_| "(unknown)".into())
 }
 
 #[tauri::command]
@@ -141,7 +127,7 @@ pub fn list_microphones() -> Result<Vec<MicrophoneInfo>, String> {
     let mut out = Vec::new();
 
     for device in devices {
-        if device.default_input_config().is_err() || is_virtual(&device) {
+        if device.default_input_config().is_err() {
             continue;
         }
         let name = device_display_name(&device);
@@ -555,7 +541,7 @@ fn try_build_stream(
     audio_shared: Arc<Mutex<VecDeque<f32>>>,
 ) -> Option<cpal::Stream> {
     let ch = config.channels as usize;
-    let pre_roll_capacity = config.sample_rate as usize * PRE_ROLL_SECONDS;
+    let pre_roll_capacity = config.sample_rate.0 as usize * PRE_ROLL_SECONDS;
     let push_samples: InputPusher = {
         let pcm_cb = Arc::clone(&pcm_shared);
         let audio_cb = Arc::clone(&audio_shared);
@@ -798,7 +784,7 @@ fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
         sample_rate: default_cfg.sample_rate(),
         buffer_size: cpal::BufferSize::Default,
     };
-    let sr = config.sample_rate;
+    let sr = config.sample_rate.0;
     MIC_SAMPLE_RATE.store(sr, Ordering::SeqCst);
 
     info!(

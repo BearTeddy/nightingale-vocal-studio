@@ -8,6 +8,7 @@ import { SampleRing } from "@/lib/mic/sample-ring";
 import { PITCH_WINDOW_SAMPLES } from "@/lib/pitch/constants";
 import { createMicPitchDetector, detectMicPitchDetails } from "@/lib/pitch/detect";
 import { freqToSemitone } from "@/lib/pitch/state";
+import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { PitchFrame } from "@/types/PitchFrame";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -139,6 +140,7 @@ export function useMicCapture(
   const [active, setActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState<string | null>(null);
+  const [status, setStatus] = useState<MicCaptureStatus | null>(null);
   const [retryGeneration, setRetryGeneration] = useState(0);
   const startedRef = useRef(false);
   const generationRef = useRef(0);
@@ -171,12 +173,14 @@ export function useMicCapture(
       setError(null);
       setActive(false);
       setDeviceName(null);
+      setStatus(null);
       return;
     }
 
     let cancelled = false;
 
     const run = async () => {
+      setStatus(null);
       try {
         const startedDevice = await adapter.startCapture(deviceId, options);
 
@@ -229,6 +233,7 @@ export function useMicCapture(
       checking = true;
       try {
         const status = await adapter.getCaptureStatus?.();
+        if (!cancelled && status) setStatus(status);
         if (!cancelled && status && !status.running) {
           startedRef.current = false;
           setActive(false);
@@ -243,6 +248,7 @@ export function useMicCapture(
         checking = false;
       }
     };
+    void check();
     const timer = window.setInterval(() => void check(), 500);
     return () => {
       cancelled = true;
@@ -250,5 +256,5 @@ export function useMicCapture(
     };
   }, [active, adapter, enabled, scheduleRetry]);
 
-  return { active, error, deviceName };
+  return { active, error, deviceName, status };
 }
