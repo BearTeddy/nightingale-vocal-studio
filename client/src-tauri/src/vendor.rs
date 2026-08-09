@@ -1,16 +1,18 @@
 use app_core::{
-    is_ready as is_vendor_ready, run_vendor_setup_with_bundle, CachePaths, OfflineVendorBundle,
-    SetupFolders,
+    is_ready as is_vendor_ready, run_vendor_setup_with_bundles, CachePaths, OfflineModelBundle,
+    OfflineVendorBundle, SetupFolders,
 };
 use tauri::{AppHandle, Emitter, Manager};
 
 #[tauri::command]
 pub fn trigger_setup(app: AppHandle, data_path: Option<String>, cache_paths: Option<CachePaths>) {
-    let bundled_vendor = app
-        .path()
-        .resource_dir()
-        .ok()
+    let resources = app.path().resource_dir().ok();
+    let bundled_vendor = resources
+        .as_ref()
         .and_then(OfflineVendorBundle::from_resource_root);
+    let bundled_models = resources
+        .as_ref()
+        .and_then(OfflineModelBundle::from_resource_root);
     std::thread::spawn(move || {
         if let Some(paths) = cache_paths.as_ref() {
             for path in [&paths.songs, &paths.videos, &paths.models, &paths.vendor]
@@ -23,12 +25,13 @@ pub fn trigger_setup(app: AppHandle, data_path: Option<String>, cache_paths: Opt
 
         let app_for_progress = app.clone();
         let app_for_migration = app.clone();
-        if let Err(e) = run_vendor_setup_with_bundle(
+        if let Err(e) = run_vendor_setup_with_bundles(
             SetupFolders {
                 data_path,
                 cache_paths,
             },
             bundled_vendor,
+            bundled_models,
             move |progress| {
                 let _ = app_for_progress.emit("setup-progress", progress);
             },

@@ -4,7 +4,8 @@ use std::{
 };
 
 use nightingale_offline_installer::{
-    PackedEntry, PackedRole, extract_packed_entry, verify_packed_installer,
+    PackedEntry, PackedRole, extract_packed_entry, install_sidecar_payload,
+    verify_packed_installer, verify_sidecar_payload,
 };
 
 fn install_directory() -> Result<PathBuf, String> {
@@ -28,6 +29,7 @@ fn install_directory() -> Result<PathBuf, String> {
     Ok(PathBuf::from(local).join("Nightingale"))
 }
 
+#[cfg(windows)]
 fn directory_bytes(root: &Path) -> Result<u64, String> {
     let mut total = 0u64;
     let mut pending = vec![root.to_path_buf()];
@@ -54,7 +56,7 @@ fn directory_bytes(root: &Path) -> Result<u64, String> {
     Ok(total)
 }
 
-fn update_installed_size(payload: &Path) -> Result<(), String> {
+fn update_installed_size(payloads: &[PathBuf]) -> Result<(), String> {
     #[cfg(windows)]
     {
         use winreg::{
@@ -69,13 +71,18 @@ fn update_installed_size(payload: &Path) -> Result<(), String> {
             )
             .map_err(|error| format!("Could not update Nightingale install metadata: {error}"))?;
         let base_kib = key.get_value::<u32, _>("EstimatedSize").unwrap_or(0);
-        let payload_kib = directory_bytes(payload)?.div_ceil(1024);
+        let payload_bytes = payloads.iter().try_fold(0u64, |total, payload| {
+            directory_bytes(payload).map(|bytes| total.saturating_add(bytes))
+        })?;
+        let payload_kib = payload_bytes.div_ceil(1024);
         let total_kib = u64::from(base_kib)
             .saturating_add(payload_kib)
             .min(u64::from(u32::MAX)) as u32;
         key.set_value("EstimatedSize", &total_kib)
             .map_err(|error| format!("Could not update Nightingale install size: {error}"))?;
     }
+    #[cfg(not(windows))]
+    let _ = payloads;
     Ok(())
 }
 
@@ -86,29 +93,37 @@ fn bootstrap_entry(entries: &[PackedEntry]) -> Result<&PackedEntry, String> {
         .ok_or_else(|| "Offline installer bootstrap is missing".to_string())
 }
 
-fn install_vendor_payload(
+fn install_payload(
     installer: &Path,
     entries: &[PackedEntry],
     install_dir: &Path,
-) -> Result<(), String> {
-    let destination = install_dir.join("offline-vendor");
-    let partial = install_dir.join(format!("offline-vendor.partial-{}", std::process::id()));
-    let backup = install_dir.join(format!("offline-vendor.backup-{}", std::process::id()));
+    role: PackedRole,
+    directory_name: &str,
+    label: &str,
+    required: bool,
+) -> Result<Option<PathBuf>, String> {
+    if !entries.iter().any(|entry| entry.role == role) {
+        return if required {
+            Err(format!("Offline installer {label} payload is missing"))
+        } else {
+            Ok(None)
+        };
+    }
+    let destination = install_dir.join(directory_name);
+    let partial = install_dir.join(format!("{directory_name}.partial-{}", std::process::id()));
+    let backup = install_dir.join(format!("{directory_name}.backup-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&partial);
     let _ = std::fs::remove_dir_all(&backup);
     std::fs::create_dir_all(&partial)
         .map_err(|error| format!("Could not create {}: {error}", partial.display()))?;
 
     let result = (|| {
-        for entry in entries
-            .iter()
-            .filter(|entry| entry.role == PackedRole::Vendor)
-        {
-            println!("Installing offline component {}...", entry.name);
+        for entry in entries.iter().filter(|entry| entry.role == role) {
+            println!("Installing offline {label} component {}...", entry.name);
             extract_packed_entry(installer, entry, partial.join(&entry.name))?;
         }
         if !partial.join("manifest.json").is_file() {
-            return Err("Offline vendor manifest was not installed".to_string());
+            return Err(format!("Offline {label} manifest was not installed"));
         }
         Ok::<_, String>(())
     })();
@@ -135,7 +150,25 @@ fn install_vendor_payload(
         ));
     }
     let _ = std::fs::remove_dir_all(&backup);
-    Ok(())
+    Ok(Some(destination))
+}
+
+fn hydrate_model_cache(install_dir: &Path, payload: &Path) -> Result<(), String> {
+    println!("Expanding offline models into the configured model cache...");
+    let app = install_dir.join("Nightingale.exe");
+    let status = Command::new(&app)
+        .arg("--install-offline-models")
+        .arg(payload)
+        .status()
+        .map_err(|error| format!("Could not start {}: {error}", app.display()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Nightingale model installation exited with {}",
+            status.code().unwrap_or(-1)
+        ))
+    }
 }
 
 fn run() -> Result<(), String> {
@@ -156,6 +189,26 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("Could not locate this installer: {error}"))?;
     println!("Verifying Nightingale offline installer...");
     let index = verify_packed_installer(&installer)?;
+    let embedded_models = index
+        .entries
+        .iter()
+        .any(|entry| entry.role == PackedRole::Models);
+    let sidecar_models = if embedded_models {
+        None
+    } else {
+        let root = installer
+            .parent()
+            .ok_or_else(|| "Offline installer directory is unavailable".to_string())?
+            .join("offline-models");
+        root.is_dir().then_some(root)
+    };
+    if let Some(models) = sidecar_models.as_ref() {
+        let verified = verify_sidecar_payload(models, &index.app_version, PackedRole::Models)?;
+        println!(
+            "Verified {} sidecar model components.",
+            verified.entries.len()
+        );
+    }
     println!(
         "Verified Nightingale {} with {} embedded components.",
         index.app_version,
@@ -196,8 +249,46 @@ fn run() -> Result<(), String> {
             install_dir.display()
         ));
     }
-    install_vendor_payload(&installer, &index.entries, &install_dir)?;
-    update_installed_size(&install_dir.join("offline-vendor"))?;
+    let mut installed_payloads = vec![
+        install_payload(
+            &installer,
+            &index.entries,
+            &install_dir,
+            PackedRole::Vendor,
+            "offline-vendor",
+            "analyzer",
+            true,
+        )?
+        .expect("required analyzer payload"),
+    ];
+    let installed_models = if let Some(models) = install_payload(
+        &installer,
+        &index.entries,
+        &install_dir,
+        PackedRole::Models,
+        "offline-models",
+        "model",
+        false,
+    )? {
+        Some(models)
+    } else if let Some(models) = sidecar_models {
+        let destination = install_dir.join("offline-models");
+        println!("Installing verified offline model sidecars...");
+        install_sidecar_payload(
+            &models,
+            &destination,
+            &index.app_version,
+            PackedRole::Models,
+        )?;
+        Some(destination)
+    } else {
+        None
+    };
+    if let Some(models) = installed_models {
+        hydrate_model_cache(&install_dir, &models)?;
+        installed_payloads.push(models);
+    }
+    update_installed_size(&installed_payloads)?;
 
     if !no_launch {
         Command::new(install_dir.join("Nightingale.exe"))

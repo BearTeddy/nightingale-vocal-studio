@@ -242,18 +242,28 @@ cargo desktop build
 
 ### Offline analyzer installer
 
-After completing setup once on the build machine, create a dependency-complete installer from that exact vendor environment:
+After completing setup once on the build machine, create a dependency-complete installer from that exact vendor environment and model cache:
 
 ```bash
-cargo desktop offline-build --vendor /path/to/nightingale-data/vendor
+cargo desktop offline-build \
+  --vendor /path/to/nightingale-data/vendor \
+  --models /path/to/nightingale-data/models
 ```
 
-On Windows this produces one `*-offline-setup.exe`: a Rust bootstrapper containing the normal NSIS installer and the complete analyzer payload. NSIS cannot create files above roughly 2 GB, so the bootstrapper uses a verified executable overlay while preserving a single-file installer. macOS defaults to a DMG with bundled resources. The packager excludes Python bytecode caches, creates a deterministic `tar.zst` payload, splits it into installer-safe parts, and writes a SHA-256 manifest. First-run setup verifies every part's size and checksum plus the app version, operating system, and architecture before extracting into the selected data folder. A failed verification leaves an existing analyzer environment untouched and falls back to online setup.
+On Windows, the analyzer-only build produces one `*-offline-setup.exe`. When model weights would push that executable above Windows' 4 GB PE limit, the complete build automatically produces a `*-complete-offline-setup/` media folder containing a runnable launcher, `offline-models/` sidecars, and a short README. Keep the folder together and run the `.exe` inside it; installation is still one command and requires no downloads. The launcher expands models directly into the configured model cache, including for upgrades that have already completed first-run setup. macOS defaults to a DMG with bundled resources. The packager excludes Python bytecode caches and transient model locks/downloads, creates deterministic `tar.zst` payloads, splits them into installer-safe parts, and writes SHA-256 manifests. First-run setup verifies every part's size and checksum plus the app version, operating system, architecture, and payload type before atomically extracting into the selected data folder. A failed verification leaves an existing analyzer or model environment untouched and falls back to online setup.
+
+Omit `--models` to produce the smaller analyzer-only `*-offline-setup.exe`; model weights will then download when an analysis backend is first used.
 
 Use `offline-stage` to create and inspect the payload without building an installer:
 
 ```bash
 cargo desktop offline-stage --vendor /path/to/nightingale-data/vendor
+```
+
+Stage and inspect model weights independently:
+
+```bash
+cargo desktop offline-models-stage --models /path/to/nightingale-data/models
 ```
 
 To migrate a previously staged single archive into multipart form without recompressing it:
@@ -265,13 +275,15 @@ cargo desktop offline-split
 Wrap an existing standard Windows setup executable and staged payload without rebuilding either:
 
 ```bash
-cargo desktop offline-wrap
+cargo desktop offline-wrap \
+  --bundle target/offline-vendor/windows-x86_64 \
+  --models-bundle target/offline-models/windows-x86_64
 ```
 
-The completed Windows installer can verify its entire embedded payload without changing the system:
+The completed Windows launcher can verify its embedded analyzer and adjacent model payload without changing the system:
 
 ```powershell
-Nightingale_1.0.0_x64-offline-setup.exe --verify-only
+Nightingale_1.0.0_x64-complete-offline-setup\Nightingale_1.0.0_x64-complete-offline-setup.exe --verify-only
 ```
 
 Verify the complete archive by extracting it to a disposable folder and starting its relocated Python imports and ffmpeg binary:
@@ -280,7 +292,13 @@ Verify the complete archive by extracting it to a disposable folder and starting
 cargo desktop offline-verify
 ```
 
-The analyzer environment can exceed 6 GB before compression. Model weights in the separately configured `models/` cache are not included yet and download when their analysis backend is first used.
+Verify the staged model cache with the same full extraction and hash checks:
+
+```bash
+cargo desktop offline-models-verify
+```
+
+The analyzer environment can exceed 6 GB before compression and the model cache can add several more gigabytes. Keep enough free space for the source data, staged payloads, verification extraction, and final installer at the same time.
 
 Local builds omit signed updater archives when `TAURI_SIGNING_PRIVATE_KEY` is unavailable, so the
 installer command still exits successfully. Tagged GitHub releases keep updater artifacts enabled

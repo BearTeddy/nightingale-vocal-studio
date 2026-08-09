@@ -13,7 +13,10 @@ use crate::{
         normalized_target_path, same_path, songs_cache_dir, vendor_dir, videos_dir,
     },
     playback::prefetch_one_per_flavor,
-    vendor_bundle::{OfflineVendorBundle, install_offline_vendor_bundle},
+    vendor_bundle::{
+        OfflineModelBundle, OfflineVendorBundle, install_offline_model_bundle,
+        install_offline_vendor_bundle,
+    },
     vendor_scripts,
 };
 
@@ -216,12 +219,22 @@ pub fn run_vendor_setup(
     on_progress: impl FnMut(SetupProgress) + Send,
     on_data_migrated: impl FnMut(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
-    run_vendor_setup_with_bundle(folders, None, on_progress, on_data_migrated)
+    run_vendor_setup_with_bundles(folders, None, None, on_progress, on_data_migrated)
 }
 
 pub fn run_vendor_setup_with_bundle(
     folders: SetupFolders,
     bundled_vendor: Option<OfflineVendorBundle>,
+    on_progress: impl FnMut(SetupProgress) + Send,
+    on_data_migrated: impl FnMut(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    run_vendor_setup_with_bundles(folders, bundled_vendor, None, on_progress, on_data_migrated)
+}
+
+pub fn run_vendor_setup_with_bundles(
+    folders: SetupFolders,
+    bundled_vendor: Option<OfflineVendorBundle>,
+    bundled_models: Option<OfflineModelBundle>,
     mut on_progress: impl FnMut(SetupProgress) + Send,
     mut on_data_migrated: impl FnMut(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -355,6 +368,39 @@ pub fn run_vendor_setup_with_bundle(
         step_install_packages()?;
     }
 
+    let offline_models_manifest = bundled_models.as_ref().and_then(|bundle| {
+        emit(
+            SetupStep::Dependencies,
+            76,
+            "Verifying bundled analysis models...".to_string(),
+        );
+        match install_offline_model_bundle(bundle, models_dir()) {
+            Ok(manifest) => Some(manifest),
+            Err(error) => {
+                warn!("[vendor] bundled offline models rejected: {error}");
+                emit(
+                    SetupStep::Dependencies,
+                    78,
+                    format!(
+                        "Bundled models unavailable ({error}); models will download when first used..."
+                    ),
+                );
+                None
+            }
+        }
+    });
+    if let Some(manifest) = offline_models_manifest.as_ref() {
+        emit(
+            SetupStep::Dependencies,
+            78,
+            format!(
+                "Installed bundled models ({:.1} GB, {} files)...",
+                manifest.uncompressed_bytes as f64 / 1_000_000_000.0,
+                manifest.file_count
+            ),
+        );
+    }
+
     emit(
         SetupStep::ExtractScripts,
         80,
@@ -362,11 +408,16 @@ pub fn run_vendor_setup_with_bundle(
     );
     step_extract_scripts()?;
 
-    if used_offline_bundle {
+    if used_offline_bundle || offline_models_manifest.is_some() {
         emit(
             SetupStep::Videos,
             90,
-            "Offline analyzer ready; backgrounds will download when available...".to_string(),
+            if offline_models_manifest.is_some() {
+                "Offline analyzer and models ready; backgrounds will download when available..."
+                    .to_string()
+            } else {
+                "Offline analyzer ready; backgrounds will download when available...".to_string()
+            },
         );
     } else {
         emit(

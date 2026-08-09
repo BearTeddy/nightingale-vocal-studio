@@ -17,6 +17,7 @@ const MAX_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 pub enum PackedRole {
     Bootstrap,
     Vendor,
+    Models,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,7 +38,13 @@ pub struct PackedIndex {
 
 #[derive(Debug, Clone, Deserialize)]
 struct VendorManifest {
+    #[serde(default)]
+    payload_kind: Option<String>,
     app_version: String,
+    #[serde(default)]
+    platform: Option<String>,
+    #[serde(default)]
+    architecture: Option<String>,
     archive: String,
     archive_sha256: String,
     archive_bytes: u64,
@@ -50,6 +57,12 @@ struct VendorPart {
     file: String,
     sha256: String,
     bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedSidecarPayload {
+    pub app_version: String,
+    pub entries: Vec<PackedEntry>,
 }
 
 fn safe_file_name(name: &str) -> bool {
@@ -154,24 +167,320 @@ fn append_source(
     })
 }
 
+fn read_payload_manifest(root: &Path, label: &str) -> Result<VendorManifest, String> {
+    let path = root.join("manifest.json");
+    let manifest = serde_json::from_slice(
+        &std::fs::read(&path)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?,
+    )
+    .map_err(|error| format!("Offline {label} manifest is invalid: {error}"))?;
+    Ok(manifest)
+}
+
+fn payload_role_label(role: &PackedRole) -> Result<(&'static str, &'static str), String> {
+    match role {
+        PackedRole::Vendor => Ok(("vendor", "vendor")),
+        PackedRole::Models => Ok(("models", "models")),
+        PackedRole::Bootstrap => {
+            Err("A bootstrap installer cannot be a sidecar payload".to_string())
+        }
+    }
+}
+
+pub fn verify_sidecar_payload(
+    root: impl AsRef<Path>,
+    expected_app_version: &str,
+    role: PackedRole,
+) -> Result<VerifiedSidecarPayload, String> {
+    let root = root.as_ref();
+    let (label, expected_kind) = payload_role_label(&role)?;
+    let manifest = read_payload_manifest(root, label)?;
+    if manifest.app_version != expected_app_version {
+        return Err(format!(
+            "Offline {label} payload is for Nightingale {}, but this installer is for {}",
+            manifest.app_version, expected_app_version
+        ));
+    }
+    if manifest
+        .payload_kind
+        .as_deref()
+        .is_some_and(|kind| kind != expected_kind)
+    {
+        return Err(format!(
+            "Offline {label} manifest has the wrong payload type"
+        ));
+    }
+    if manifest
+        .platform
+        .as_deref()
+        .is_some_and(|platform| platform != std::env::consts::OS)
+    {
+        return Err(format!(
+            "Offline {label} payload is for a different operating system"
+        ));
+    }
+    if manifest
+        .architecture
+        .as_deref()
+        .is_some_and(|architecture| architecture != std::env::consts::ARCH)
+    {
+        return Err(format!(
+            "Offline {label} payload is for a different architecture"
+        ));
+    }
+    if manifest.parts.is_empty() && manifest.archive_bytes == 0 {
+        return Err(format!("Offline {label} manifest has no payload"));
+    }
+
+    let manifest_path = root.join("manifest.json");
+    let manifest_bytes = manifest_path
+        .metadata()
+        .map_err(|error| format!("Could not inspect {}: {error}", manifest_path.display()))?
+        .len();
+    let mut entries = vec![PackedEntry {
+        role: role.clone(),
+        name: "manifest.json".to_string(),
+        offset: 0,
+        bytes: manifest_bytes,
+        sha256: sha256_range(&manifest_path, 0, manifest_bytes)?,
+    }];
+
+    let sources = if manifest.parts.is_empty() {
+        vec![VendorPart {
+            file: manifest.archive.clone(),
+            sha256: manifest.archive_sha256.clone(),
+            bytes: manifest.archive_bytes,
+        }]
+    } else {
+        let part_bytes = manifest
+            .parts
+            .iter()
+            .try_fold(0u64, |total, part| total.checked_add(part.bytes))
+            .ok_or_else(|| format!("Offline {label} payload size is invalid"))?;
+        if part_bytes != manifest.archive_bytes {
+            return Err(format!(
+                "Offline {label} parts do not match the archive size"
+            ));
+        }
+        manifest.parts.clone()
+    };
+    for source in sources {
+        if !safe_file_name(&source.file) {
+            return Err(format!(
+                "Offline {label} filename is unsafe: {}",
+                source.file
+            ));
+        }
+        let path = root.join(&source.file);
+        let bytes = path
+            .metadata()
+            .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?
+            .len();
+        if bytes != source.bytes {
+            return Err(format!(
+                "Offline {label} component {} has the wrong size",
+                source.file
+            ));
+        }
+        let sha256 = sha256_range(&path, 0, bytes)?;
+        if !sha256.eq_ignore_ascii_case(&source.sha256) {
+            return Err(format!(
+                "Offline {label} component {} failed checksum verification",
+                source.file
+            ));
+        }
+        entries.push(PackedEntry {
+            role: role.clone(),
+            name: source.file,
+            offset: 0,
+            bytes,
+            sha256,
+        });
+    }
+    Ok(VerifiedSidecarPayload {
+        app_version: manifest.app_version,
+        entries,
+    })
+}
+
+fn copy_verified_sidecar_entry(
+    root: &Path,
+    entry: &PackedEntry,
+    destination: &Path,
+) -> Result<(), String> {
+    let source_path = root.join(&entry.name);
+    let mut source = BufReader::with_capacity(
+        8 * 1024 * 1024,
+        File::open(&source_path)
+            .map_err(|error| format!("Could not open {}: {error}", source_path.display()))?,
+    );
+    let mut target = BufWriter::with_capacity(
+        8 * 1024 * 1024,
+        File::create(destination)
+            .map_err(|error| format!("Could not create {}: {error}", destination.display()))?,
+    );
+    let mut digest = Sha256::new();
+    let mut copied = 0u64;
+    let mut buffer = vec![0u8; 8 * 1024 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not read {}: {error}", source_path.display()))?;
+        if read == 0 {
+            break;
+        }
+        target
+            .write_all(&buffer[..read])
+            .map_err(|error| format!("Could not copy {}: {error}", entry.name))?;
+        digest.update(&buffer[..read]);
+        copied += read as u64;
+    }
+    target
+        .flush()
+        .map_err(|error| format!("Could not finish {}: {error}", destination.display()))?;
+    if copied != entry.bytes
+        || !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(&entry.sha256)
+    {
+        let _ = std::fs::remove_file(destination);
+        return Err(format!(
+            "Offline sidecar component {} changed while it was copied",
+            entry.name
+        ));
+    }
+    Ok(())
+}
+
+pub fn install_sidecar_payload(
+    root: impl AsRef<Path>,
+    destination: impl AsRef<Path>,
+    expected_app_version: &str,
+    role: PackedRole,
+) -> Result<VerifiedSidecarPayload, String> {
+    let root = root.as_ref();
+    let destination = destination.as_ref();
+    let verified = verify_sidecar_payload(root, expected_app_version, role)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| format!("Sidecar destination is invalid: {}", destination.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("Sidecar destination is invalid: {}", destination.display()))?;
+    let partial = parent.join(format!("{name}.partial-{}", std::process::id()));
+    let backup = parent.join(format!("{name}.backup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&partial);
+    let _ = std::fs::remove_dir_all(&backup);
+    std::fs::create_dir_all(&partial)
+        .map_err(|error| format!("Could not create {}: {error}", partial.display()))?;
+    for entry in &verified.entries {
+        if let Err(error) = copy_verified_sidecar_entry(root, entry, &partial.join(&entry.name)) {
+            let _ = std::fs::remove_dir_all(&partial);
+            return Err(error);
+        }
+    }
+    if destination.exists() {
+        std::fs::rename(destination, &backup).map_err(|error| {
+            format!(
+                "Could not preserve existing sidecar payload {}: {error}",
+                destination.display()
+            )
+        })?;
+    }
+    if let Err(error) = std::fs::rename(&partial, destination) {
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, destination);
+        }
+        return Err(format!(
+            "Could not activate sidecar payload {}: {error}",
+            destination.display()
+        ));
+    }
+    let _ = std::fs::remove_dir_all(&backup);
+    Ok(verified)
+}
+
+fn append_payload_bundle(
+    writer: &mut BufWriter<File>,
+    offset: &mut u64,
+    entries: &mut Vec<PackedEntry>,
+    root: &Path,
+    manifest: &VendorManifest,
+    role: PackedRole,
+) -> Result<(), String> {
+    entries.push(append_source(
+        writer,
+        offset,
+        &root.join("manifest.json"),
+        role.clone(),
+        "manifest.json".to_string(),
+        None,
+        None,
+    )?);
+    if manifest.parts.is_empty() {
+        entries.push(append_source(
+            writer,
+            offset,
+            &root.join(&manifest.archive),
+            role,
+            manifest.archive.clone(),
+            Some(&manifest.archive_sha256),
+            Some(manifest.archive_bytes),
+        )?);
+    } else {
+        for part in &manifest.parts {
+            entries.push(append_source(
+                writer,
+                offset,
+                &root.join(&part.file),
+                role.clone(),
+                part.file.clone(),
+                Some(&part.sha256),
+                Some(part.bytes),
+            )?);
+        }
+    }
+    Ok(())
+}
+
 pub fn pack_offline_installer(
     stub: impl AsRef<Path>,
     bootstrap_setup: impl AsRef<Path>,
     vendor_root: impl AsRef<Path>,
     output: impl AsRef<Path>,
 ) -> Result<PackedIndex, String> {
+    pack_offline_installer_with_models(stub, bootstrap_setup, vendor_root, None, output)
+}
+
+pub fn pack_offline_installer_with_models(
+    stub: impl AsRef<Path>,
+    bootstrap_setup: impl AsRef<Path>,
+    vendor_root: impl AsRef<Path>,
+    models_root: Option<&Path>,
+    output: impl AsRef<Path>,
+) -> Result<PackedIndex, String> {
     let stub = stub.as_ref();
     let bootstrap_setup = bootstrap_setup.as_ref();
     let vendor_root = vendor_root.as_ref();
     let output = output.as_ref();
-    let manifest_path = vendor_root.join("manifest.json");
-    let manifest: VendorManifest = serde_json::from_slice(
-        &std::fs::read(&manifest_path)
-            .map_err(|error| format!("Could not read {}: {error}", manifest_path.display()))?,
-    )
-    .map_err(|error| format!("Offline vendor manifest is invalid: {error}"))?;
+    let manifest = read_payload_manifest(vendor_root, "vendor")?;
     if manifest.parts.is_empty() && manifest.archive_bytes == 0 {
         return Err("Offline vendor manifest has no payload".to_string());
+    }
+    let models_manifest = models_root
+        .map(|root| read_payload_manifest(root, "models"))
+        .transpose()?;
+    if let Some(models_manifest) = models_manifest.as_ref() {
+        if models_manifest.parts.is_empty() && models_manifest.archive_bytes == 0 {
+            return Err("Offline models manifest has no payload".to_string());
+        }
+        if models_manifest.app_version != manifest.app_version {
+            return Err(format!(
+                "Offline models are for Nightingale {}, but the analyzer is for {}",
+                models_manifest.app_version, manifest.app_version
+            ));
+        }
     }
 
     if let Some(parent) = output.parent() {
@@ -209,38 +518,24 @@ pub fn pack_offline_installer(
             None,
             None,
         )?);
-        entries.push(append_source(
+        append_payload_bundle(
             &mut writer,
             &mut offset,
-            &manifest_path,
+            &mut entries,
+            vendor_root,
+            &manifest,
             PackedRole::Vendor,
-            "manifest.json".to_string(),
-            None,
-            None,
-        )?);
-
-        if manifest.parts.is_empty() {
-            entries.push(append_source(
+        )?;
+        if let (Some(models_root), Some(models_manifest)) = (models_root, models_manifest.as_ref())
+        {
+            append_payload_bundle(
                 &mut writer,
                 &mut offset,
-                &vendor_root.join(&manifest.archive),
-                PackedRole::Vendor,
-                manifest.archive,
-                Some(&manifest.archive_sha256),
-                Some(manifest.archive_bytes),
-            )?);
-        } else {
-            for part in &manifest.parts {
-                entries.push(append_source(
-                    &mut writer,
-                    &mut offset,
-                    &vendor_root.join(&part.file),
-                    PackedRole::Vendor,
-                    part.file.clone(),
-                    Some(&part.sha256),
-                    Some(part.bytes),
-                )?);
-            }
+                &mut entries,
+                models_root,
+                models_manifest,
+                PackedRole::Models,
+            )?;
         }
 
         let index = PackedIndex {
@@ -342,6 +637,28 @@ fn validate_index(index: &PackedIndex, data_end: u64) -> Result<(), String> {
             != 1
     {
         return Err("Offline installer index is incomplete".to_string());
+    }
+    if index
+        .entries
+        .iter()
+        .filter(|entry| entry.role == PackedRole::Vendor && entry.name == "manifest.json")
+        .count()
+        != 1
+    {
+        return Err("Offline installer vendor payload is incomplete".to_string());
+    }
+    let model_entries = index
+        .entries
+        .iter()
+        .filter(|entry| entry.role == PackedRole::Models)
+        .count();
+    let model_manifests = index
+        .entries
+        .iter()
+        .filter(|entry| entry.role == PackedRole::Models && entry.name == "manifest.json")
+        .count();
+    if model_entries > 0 && model_manifests != 1 {
+        return Err("Offline installer model payload is incomplete".to_string());
     }
     let mut previous_end = 0u64;
     for entry in &index.entries {
@@ -449,8 +766,10 @@ pub fn extract_packed_entry(
 #[cfg(test)]
 mod tests {
     use super::{
-        PackedRole, extract_packed_entry, pack_offline_installer, verify_packed_installer,
+        PackedRole, extract_packed_entry, install_sidecar_payload, pack_offline_installer,
+        pack_offline_installer_with_models, verify_packed_installer, verify_sidecar_payload,
     };
+    use sha2::{Digest, Sha256};
     use std::{
         io::{Seek, Write},
         time::{SystemTime, UNIX_EPOCH},
@@ -488,6 +807,30 @@ mod tests {
         .unwrap();
         let output = root.join("offline.exe");
         (root, output)
+    }
+
+    fn add_models_fixture(root: &std::path::Path) -> std::path::PathBuf {
+        let models = root.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("models.tar.zst.part001"), b"weights").unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"weights"));
+        std::fs::write(
+            models.join("manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "app_version": "1.0.0",
+                "archive": "models.tar.zst",
+                "archive_sha256": "unused",
+                "archive_bytes": 7,
+                "parts": [{
+                    "file": "models.tar.zst.part001",
+                    "sha256": hash,
+                    "bytes": 7
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        models
     }
 
     #[test]
@@ -535,6 +878,59 @@ mod tests {
         file.seek(std::io::SeekFrom::Start(part.offset)).unwrap();
         file.write_all(b"X").unwrap();
         assert!(verify_packed_installer(&output).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn packs_and_verifies_an_optional_model_payload() {
+        let (root, output) = fixture();
+        let models = add_models_fixture(&root);
+        let index = pack_offline_installer_with_models(
+            root.join("stub.exe"),
+            root.join("setup.exe"),
+            root.join("vendor"),
+            Some(&models),
+            &output,
+        )
+        .unwrap();
+        assert!(
+            index
+                .entries
+                .iter()
+                .any(|entry| entry.role == PackedRole::Models && entry.name == "manifest.json")
+        );
+        assert!(
+            index
+                .entries
+                .iter()
+                .any(|entry| entry.role == PackedRole::Models && entry.name.ends_with("part001"))
+        );
+        verify_packed_installer(&output).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verifies_and_atomically_installs_model_sidecars() {
+        let (root, _) = fixture();
+        let models = add_models_fixture(&root);
+        let verified = verify_sidecar_payload(&models, "1.0.0", PackedRole::Models).unwrap();
+        assert_eq!(verified.entries.len(), 2);
+
+        let destination = root.join("installed-models-模");
+        install_sidecar_payload(&models, &destination, "1.0.0", PackedRole::Models).unwrap();
+        assert_eq!(
+            std::fs::read(destination.join("models.tar.zst.part001")).unwrap(),
+            b"weights"
+        );
+
+        std::fs::write(models.join("models.tar.zst.part001"), b"damaged").unwrap();
+        assert!(
+            install_sidecar_payload(&models, &destination, "1.0.0", PackedRole::Models).is_err()
+        );
+        assert_eq!(
+            std::fs::read(destination.join("models.tar.zst.part001")).unwrap(),
+            b"weights"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

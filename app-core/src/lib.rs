@@ -29,8 +29,8 @@ pub use analyzer::{
 };
 pub use cache::{
     CacheDir, CachePaths, CacheStats, cache_roots, change_app_data_path, clear_models,
-    clear_videos, default_nightingale_dir, nightingale_dir, normalized_target_path, same_path,
-    vendor_dir,
+    clear_videos, default_nightingale_dir, models_dir, nightingale_dir, normalized_target_path,
+    same_path, vendor_dir,
 };
 pub use config::{AppConfig, LibrarySource};
 pub use desktop_shortcut::ensure_data_shortcut;
@@ -79,13 +79,15 @@ pub use source::{
 pub use vendor::{
     SetupFolders, SetupProgress, SetupStep, clear_vendor_dir, is_ready, mark_ready,
     refresh_analyzer_scripts_if_ready, resolve_data_path_input, run_vendor_setup,
-    run_vendor_setup_with_bundle, step_create_venv, step_download_ffmpeg, step_download_uv,
-    step_extract_scripts, step_install_packages, step_install_python,
+    run_vendor_setup_with_bundle, run_vendor_setup_with_bundles, step_create_venv,
+    step_download_ffmpeg, step_download_uv, step_extract_scripts, step_install_packages,
+    step_install_python,
 };
 pub use vendor_bundle::{
-    OfflineVendorBundle, OfflineVendorManifest, OfflineVendorPart, StagedOfflineVendor,
+    OfflineModelBundle, OfflinePayloadKind, OfflineVendorBundle, OfflineVendorManifest,
+    OfflineVendorPart, StagedOfflineVendor, install_offline_model_bundle,
     install_offline_vendor_bundle, split_existing_offline_vendor_bundle,
-    stage_offline_vendor_bundle, verify_offline_vendor_runtime,
+    stage_offline_model_bundle, stage_offline_vendor_bundle, verify_offline_vendor_runtime,
 };
 pub use youtube::{YoutubeImportResult, import_youtube};
 
