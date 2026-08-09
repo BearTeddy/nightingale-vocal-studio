@@ -28,9 +28,10 @@ import {
   assessIntervalAnswer,
   assessSungPitch,
   INTERVAL_CHOICES,
-  intervalAccuracy,
   intervalChoice,
+  listeningScores,
   nextInterval,
+  shouldAutoStartListeningCapture,
   type IntervalAnswer,
   type SungPitchAttempt,
 } from "@/lib/interval-listening";
@@ -537,6 +538,7 @@ export function VocalStudioPage() {
   const [listeningSingError, setListeningSingError] = useState<string | null>(null);
   const listeningSingFrames = useRef<PitchFrame[]>([]);
   const listeningSingStarted = useRef(0);
+  const listeningSingAttempted = useRef(false);
   const listeningSetStartedAt = useRef<number | null>(null);
 
   const baseMidi = useMemo(() => {
@@ -934,6 +936,7 @@ export function VocalStudioPage() {
 
   const resetListeningPrompt = useCallback(() => {
     listeningSingFrames.current = [];
+    listeningSingAttempted.current = false;
     setListeningQuestion(null);
     setListeningReady(false);
     setListeningAnswer(null);
@@ -1114,6 +1117,7 @@ export function VocalStudioPage() {
       };
       setListeningQuestion(question);
       if (!replay) {
+        listeningSingAttempted.current = false;
         setListeningAnswer(null);
         setListeningSingResult(null);
         setListeningSingError(null);
@@ -1154,12 +1158,13 @@ export function VocalStudioPage() {
     setListeningSingSeconds(0);
     setRunningExercise(null);
     setExercisePhase(null);
-    setExerciseNoteMidi(null);
-    setTargetMidi(null);
+    setExerciseNoteMidi(target);
+    setTargetMidi(target);
   }, [listeningQuestion]);
 
   const startListeningSing = useCallback(() => {
     if (!listeningQuestion || !listeningReady) return;
+    listeningSingAttempted.current = true;
     if (!capture.active) {
       setListeningSingError(capture.error ?? "The microphone is not ready yet.");
       return;
@@ -1180,6 +1185,28 @@ export function VocalStudioPage() {
       if (elapsed >= 4) finishListeningSing();
     }, 100);
   }, [capture.active, capture.error, finishListeningSing, listeningQuestion, listeningReady]);
+
+  useEffect(() => {
+    if (
+      !shouldAutoStartListeningCapture({
+        ready: listeningReady,
+        microphoneActive: capture.active,
+        attempted: listeningSingAttempted.current,
+        answered: listeningAnswer != null,
+        busy: runningExercise != null,
+      })
+    ) {
+      return;
+    }
+    startListeningSing();
+  }, [
+    capture.active,
+    listeningAnswer,
+    listeningQuestion,
+    listeningReady,
+    runningExercise,
+    startListeningSing,
+  ]);
 
   const answerListeningQuestion = useCallback(
     (selectedSemitones: number) => {
@@ -1222,6 +1249,8 @@ export function VocalStudioPage() {
       activeProfile,
     ],
   );
+
+  const listeningScoreSummary = listeningScores(listeningAnswers, listeningSungAttempts);
 
   useEffect(
     () => () => {
@@ -1586,6 +1615,7 @@ export function VocalStudioPage() {
                         type="button"
                         disabled={runningExercise != null || exerciseStopping}
                         onClick={() => void playListeningQuestion(false)}
+                        className="min-w-44"
                       >
                         <Ear className="size-4" />
                         {!listeningQuestion
@@ -1600,6 +1630,7 @@ export function VocalStudioPage() {
                         variant="outline"
                         disabled={runningExercise != null}
                         onClick={() => void playListeningQuestion(true)}
+                        className="min-w-44"
                       >
                         <Volume2 className="size-4" /> Replay
                       </Button>
@@ -1641,35 +1672,47 @@ export function VocalStudioPage() {
                               ? finishListeningSing
                               : startListeningSing
                           }
+                          className="min-w-44"
                         >
                           {runningExercise === "listening-sing" ? (
                             <Square className="size-4" />
                           ) : (
                             <Mic2 className="size-4" />
                           )}
-                          {runningExercise === "listening-sing" ? "Finish" : "Sing second note"}
+                          {runningExercise === "listening-sing"
+                            ? "Finish"
+                            : listeningSingResult || listeningSingError
+                              ? "Try voice again"
+                              : "Sing second note"}
                         </Button>
                       )}
                     </div>
-                    {listeningSingResult && (
-                      <div className="mt-4" aria-live="polite" aria-atomic="true">
-                        <div className="flex items-center justify-between gap-4 text-sm">
-                          <span>{listeningSingResult.feedback}</span>
-                          <span className="font-semibold tabular-nums">
-                            {listeningSingResult.score}%
+                    <div className="mt-4 min-h-14" aria-live="polite" aria-atomic="true">
+                      <div className="flex h-10 items-start justify-between gap-4 text-sm">
+                        {listeningSingResult ? (
+                          <>
+                            <span className="line-clamp-2">{listeningSingResult.feedback}</span>
+                            <span className="shrink-0 font-semibold tabular-nums">
+                              {listeningSingResult.score}%
+                            </span>
+                          </>
+                        ) : listeningSingError ? (
+                          <p className="line-clamp-2 text-destructive" role="alert">
+                            {listeningSingError}
+                          </p>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {runningExercise === "listening-sing"
+                              ? "Listening for a steady note..."
+                              : "Awaiting voice response"}
                           </span>
-                        </div>
-                        <Progress
-                          value={listeningSingResult.score}
-                          className="mt-2 h-1.5 rounded-none"
-                        />
+                        )}
                       </div>
-                    )}
-                    {listeningSingError && (
-                      <p className="mt-3 text-sm text-destructive" role="alert">
-                        {listeningSingError}
-                      </p>
-                    )}
+                      <Progress
+                        value={listeningSingResult?.score ?? 0}
+                        className="h-1.5 rounded-none"
+                      />
+                    </div>
                   </div>
 
                   {listeningQuestion && (
@@ -1683,7 +1726,11 @@ export function VocalStudioPage() {
                             key={choice.semitones}
                             type="button"
                             variant="outline"
-                            disabled={!listeningReady || listeningAnswer != null}
+                            disabled={
+                              !listeningReady ||
+                              listeningAnswer != null ||
+                              runningExercise === "listening-sing"
+                            }
                             onClick={() => answerListeningQuestion(choice.semitones)}
                             className="justify-start"
                           >
@@ -1691,40 +1738,56 @@ export function VocalStudioPage() {
                           </Button>
                         ))}
                       </div>
-                      {!listeningReady && !listeningAnswer && (
-                        <p className="mt-4 text-sm text-primary" aria-live="polite">
-                          Listen to both notes...
-                        </p>
-                      )}
-                      {listeningAnswer && (
-                        <div
-                          className="mt-5 flex gap-3 border-t border-border pt-4"
-                          aria-live="polite"
-                          aria-atomic="true"
-                        >
-                          {listeningAnswer.correct ? (
-                            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-500" />
-                          ) : (
-                            <XCircle className="mt-0.5 size-5 shrink-0 text-amber-500" />
-                          )}
-                          <div>
-                            <p className="text-sm font-medium">
-                              {listeningAnswer.correct
-                                ? `Correct: ${intervalChoice(listeningAnswer.expectedSemitones).label}`
-                                : `That was ${intervalChoice(listeningAnswer.expectedSemitones).label}`}
-                            </p>
-                            {!listeningAnswer.correct && (
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                You chose {intervalChoice(listeningAnswer.selectedSemitones).label}.
-                                Replay the notes once, then compare the size of the jump.
-                              </p>
+                      <div
+                        className="mt-4 min-h-24 border-t border-border pt-4"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      >
+                        {!listeningReady ? (
+                          <p className="text-sm text-primary">Listen to both notes...</p>
+                        ) : runningExercise === "listening-sing" ? (
+                          <p className="text-sm text-primary">Voice response in progress...</p>
+                        ) : listeningAnswer ? (
+                          <div className="flex gap-3">
+                            {listeningAnswer.correct ? (
+                              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-500" />
+                            ) : (
+                              <XCircle className="mt-0.5 size-5 shrink-0 text-amber-500" />
                             )}
-                            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                              Set accuracy {intervalAccuracy(listeningAnswers)}%
-                            </p>
+                            <div>
+                              <p className="text-sm font-medium">
+                                {listeningAnswer.correct
+                                  ? `Correct: ${intervalChoice(listeningAnswer.expectedSemitones).label}`
+                                  : `That was ${intervalChoice(listeningAnswer.expectedSemitones).label}`}
+                              </p>
+                              {!listeningAnswer.correct && (
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  You chose{" "}
+                                  {intervalChoice(listeningAnswer.selectedSemitones).label}. Replay
+                                  the notes once, then compare the size of the jump.
+                                </p>
+                              )}
+                              <div className="mt-2 grid grid-cols-3 gap-4 text-xs text-muted-foreground tabular-nums">
+                                <span>Set {listeningScoreSummary.overall}%</span>
+                                <span>
+                                  Interval{" "}
+                                  {listeningScoreSummary.interval == null
+                                    ? "--"
+                                    : `${listeningScoreSummary.interval}%`}
+                                </span>
+                                <span>
+                                  Voice{" "}
+                                  {listeningScoreSummary.pitch == null
+                                    ? "--"
+                                    : `${listeningScoreSummary.pitch}%`}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Choose the interval.</p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

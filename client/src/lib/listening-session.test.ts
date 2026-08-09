@@ -29,8 +29,10 @@ describe("Listening practice sessions", () => {
     expect(session.started_at).toBe(100);
     expect(session.ended_at).toBe(125);
     expect(performance).toMatchObject({
-      version: 2,
-      score: 50,
+      version: 3,
+      score: 75,
+      intervalScore: 50,
+      pitchScore: 100,
       exercise: "Hear, sing, and name",
       answers,
       sungAttempts: [centered, null],

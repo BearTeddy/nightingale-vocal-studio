@@ -1,5 +1,5 @@
 import {
-  intervalAccuracy,
+  listeningScores,
   type IntervalAnswer,
   type SungPitchAttempt,
 } from "@/lib/interval-listening";
@@ -22,7 +22,7 @@ export function buildListeningSession({
   answers,
   sungAttempts,
 }: BuildListeningSessionOptions): SavePracticeSession {
-  const score = intervalAccuracy(answers);
+  const scores = listeningScores(answers, sungAttempts);
   return {
     id,
     profile,
@@ -31,8 +31,10 @@ export function buildListeningSession({
     started_at: Math.min(startedAt, endedAt),
     ended_at: endedAt,
     performance_json: JSON.stringify({
-      version: 2,
-      score,
+      version: 3,
+      score: scores.overall,
+      intervalScore: scores.interval,
+      pitchScore: scores.pitch,
       exercise: "Hear, sing, and name",
       answers,
       sungAttempts,

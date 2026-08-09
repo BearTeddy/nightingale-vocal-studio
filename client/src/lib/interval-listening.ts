@@ -23,6 +23,20 @@ export interface SungPitchAttempt {
   feedback: string;
 }
 
+export interface ListeningScores {
+  overall: number;
+  interval: number | null;
+  pitch: number | null;
+}
+
+export interface ListeningCaptureState {
+  ready: boolean;
+  microphoneActive: boolean;
+  attempted: boolean;
+  answered: boolean;
+  busy: boolean;
+}
+
 export const INTERVAL_CHOICES: IntervalChoice[] = [
   { semitones: 0, label: "Unison", shortLabel: "Same note" },
   { semitones: 2, label: "Major second", shortLabel: "Major 2nd" },
@@ -59,6 +73,37 @@ export function intervalAccuracy(answers: IntervalAnswer[]): number {
   return Math.round((answers.filter((answer) => answer.correct).length / answers.length) * 100);
 }
 
+export function listeningScores(
+  answers: IntervalAnswer[],
+  sungAttempts: Array<SungPitchAttempt | null>,
+): ListeningScores {
+  const interval = answers.length === 0 ? null : intervalAccuracy(answers);
+  const pitchAttempts = sungAttempts.filter(
+    (attempt): attempt is SungPitchAttempt => attempt != null && Number.isFinite(attempt.score),
+  );
+  const pitch =
+    pitchAttempts.length === 0
+      ? null
+      : Math.round(
+          pitchAttempts.reduce((total, attempt) => total + attempt.score, 0) / pitchAttempts.length,
+        );
+  const available = [interval, pitch].filter((score): score is number => score != null);
+  return {
+    overall:
+      available.length === 0
+        ? 0
+        : Math.round(available.reduce((total, score) => total + score, 0) / available.length),
+    interval,
+    pitch,
+  };
+}
+
+export function shouldAutoStartListeningCapture(state: ListeningCaptureState): boolean {
+  return (
+    state.ready && state.microphoneActive && !state.attempted && !state.answered && !state.busy
+  );
+}
+
 export function nextInterval(previousSemitones: number | null, random = Math.random): number {
   const choices = INTERVAL_CHOICES.filter(
     (choice) => INTERVAL_CHOICES.length === 1 || choice.semitones !== previousSemitones,
@@ -70,15 +115,10 @@ export function nextInterval(previousSemitones: number | null, random = Math.ran
 function median(values: number[]): number {
   const sorted = [...values].sort((left, right) => left - right);
   const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[middle - 1] + sorted[middle]) / 2
-    : sorted[middle];
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
-export function assessSungPitch(
-  targetMidi: number,
-  frames: PitchFrame[],
-): SungPitchAttempt | null {
+export function assessSungPitch(targetMidi: number, frames: PitchFrame[]): SungPitchAttempt | null {
   const voiced = frames.filter(
     (frame) =>
       frame.voiced &&
