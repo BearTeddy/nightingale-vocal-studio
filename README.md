@@ -27,7 +27,7 @@
 
 Nightingale scans your music folder, Plex Media Server, Jellyfin server, Navidrome server, or self-hosted web library; separates lead vocals from instrumentals using the [UVR Karaoke model](https://github.com/Anjok07/ultimatevocalremovergui) (or [Demucs](https://github.com/facebookresearch/demucs)); transcribes lyrics with word-level timestamps via [WhisperX](https://github.com/m-bain/whisperX); and plays it all back with synchronized highlighting, pitch scoring, key/tempo controls, profiles, and dynamic backgrounds.
 
-Ships as a single binary. No manual installation of Python, ffmpeg, or ML models required — everything is downloaded and bootstrapped automatically on first launch.
+The standard installer ships as a small desktop app and bootstraps Python, ffmpeg, and ML packages automatically on first launch. An offline installer build can embed the already-provisioned analyzer runtime in the installer, so Python and package setup does not need a network connection.
 
 ## Features
 
@@ -239,6 +239,48 @@ cargo desktop dev
 ```bash
 cargo desktop build
 ```
+
+### Offline analyzer installer
+
+After completing setup once on the build machine, create a dependency-complete installer from that exact vendor environment:
+
+```bash
+cargo desktop offline-build --vendor /path/to/nightingale-data/vendor
+```
+
+On Windows this produces one `*-offline-setup.exe`: a Rust bootstrapper containing the normal NSIS installer and the complete analyzer payload. NSIS cannot create files above roughly 2 GB, so the bootstrapper uses a verified executable overlay while preserving a single-file installer. macOS defaults to a DMG with bundled resources. The packager excludes Python bytecode caches, creates a deterministic `tar.zst` payload, splits it into installer-safe parts, and writes a SHA-256 manifest. First-run setup verifies every part's size and checksum plus the app version, operating system, and architecture before extracting into the selected data folder. A failed verification leaves an existing analyzer environment untouched and falls back to online setup.
+
+Use `offline-stage` to create and inspect the payload without building an installer:
+
+```bash
+cargo desktop offline-stage --vendor /path/to/nightingale-data/vendor
+```
+
+To migrate a previously staged single archive into multipart form without recompressing it:
+
+```bash
+cargo desktop offline-split
+```
+
+Wrap an existing standard Windows setup executable and staged payload without rebuilding either:
+
+```bash
+cargo desktop offline-wrap
+```
+
+The completed Windows installer can verify its entire embedded payload without changing the system:
+
+```powershell
+Nightingale_1.0.0_x64-offline-setup.exe --verify-only
+```
+
+Verify the complete archive by extracting it to a disposable folder and starting its relocated Python imports and ffmpeg binary:
+
+```bash
+cargo desktop offline-verify
+```
+
+The analyzer environment can exceed 6 GB before compression. Model weights in the separately configured `models/` cache are not included yet and download when their analysis backend is first used.
 
 Local builds omit signed updater archives when `TAURI_SIGNING_PRIVATE_KEY` is unavailable, so the
 installer command still exits successfully. Tagged GitHub releases keep updater artifacts enabled

@@ -3,3 +3,8 @@ name = "xtask"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[dependencies]
+app-core = { path = "../app-core" }
+nightingale-offline-installer = { path = "../offline-installer" }
+serde_json = "1"

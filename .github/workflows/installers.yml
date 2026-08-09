@@ -39,6 +39,12 @@ jobs:
         with:
           key: installer-${{ matrix.target }}
 
+      - name: Verify offline dependency packager
+        run: |
+          cargo test -p app-core vendor_bundle
+          cargo test -p nightingale-offline-installer
+          cargo test -p xtask
+
       - name: Install frontend dependencies
         working-directory: client
         run: pnpm install --frozen-lockfile
@@ -86,6 +92,12 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           key: installer-windows-x64
+
+      - name: Verify offline dependency packager
+        run: |
+          cargo test -p app-core vendor_bundle
+          cargo test -p nightingale-offline-installer
+          cargo test -p xtask
 
       - name: Install frontend dependencies
         working-directory: client

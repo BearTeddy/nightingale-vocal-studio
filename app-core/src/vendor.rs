@@ -4,8 +4,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-#[allow(unused_imports)]
-use tracing::info;
+use tracing::{info, warn};
 use ts_rs::TS;
 
 use crate::{
@@ -14,6 +13,7 @@ use crate::{
         normalized_target_path, same_path, songs_cache_dir, vendor_dir, videos_dir,
     },
     playback::prefetch_one_per_flavor,
+    vendor_bundle::{OfflineVendorBundle, install_offline_vendor_bundle},
     vendor_scripts,
 };
 
@@ -213,6 +213,15 @@ fn migrate_cache_data_to_targets(targets: &CachePaths) -> Result<(), String> {
 
 pub fn run_vendor_setup(
     folders: SetupFolders,
+    on_progress: impl FnMut(SetupProgress) + Send,
+    on_data_migrated: impl FnMut(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    run_vendor_setup_with_bundle(folders, None, on_progress, on_data_migrated)
+}
+
+pub fn run_vendor_setup_with_bundle(
+    folders: SetupFolders,
+    bundled_vendor: Option<OfflineVendorBundle>,
     mut on_progress: impl FnMut(SetupProgress) + Send,
     mut on_data_migrated: impl FnMut(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -277,7 +286,28 @@ pub fn run_vendor_setup(
     cfg.cache_paths = separate_targets;
     cfg.save();
 
-    if !cleared_vendor {
+    let offline_manifest = bundled_vendor.as_ref().and_then(|bundle| {
+        emit(
+            SetupStep::Ffmpeg,
+            24,
+            "Verifying bundled offline analyzer...".to_string(),
+        );
+        match install_offline_vendor_bundle(bundle, vendor_dir()) {
+            Ok(manifest) => Some(manifest),
+            Err(error) => {
+                warn!("[vendor] bundled offline analyzer rejected: {error}");
+                emit(
+                    SetupStep::Ffmpeg,
+                    24,
+                    format!("Bundled analyzer unavailable ({error}); using online setup..."),
+                );
+                None
+            }
+        }
+    });
+
+    let used_offline_bundle = offline_manifest.is_some();
+    if !used_offline_bundle && !cleared_vendor {
         emit(
             SetupStep::ClearVendor,
             14,
@@ -286,28 +316,44 @@ pub fn run_vendor_setup(
         clear_vendor_dir()?;
     }
 
-    emit(SetupStep::Ffmpeg, 24, "Downloading ffmpeg...".to_string());
-    step_download_ffmpeg()?;
+    if let Some(manifest) = offline_manifest {
+        emit(
+            SetupStep::Dependencies,
+            76,
+            format!(
+                "Installed bundled analyzer ({:.1} GB, {} files)...",
+                manifest.uncompressed_bytes as f64 / 1_000_000_000.0,
+                manifest.file_count
+            ),
+        );
+        repair_relocated_venv()?;
+        if !python_runtime_works() {
+            return Err("Bundled Python runtime could not start after extraction".to_string());
+        }
+    } else {
+        emit(SetupStep::Ffmpeg, 24, "Downloading ffmpeg...".to_string());
+        step_download_ffmpeg()?;
 
-    emit(SetupStep::Uv, 34, "Downloading uv...".to_string());
-    step_download_uv()?;
+        emit(SetupStep::Uv, 34, "Downloading uv...".to_string());
+        step_download_uv()?;
 
-    emit(
-        SetupStep::Python,
-        46,
-        "Installing python3.10 via uv...".to_string(),
-    );
-    step_install_python()?;
+        emit(
+            SetupStep::Python,
+            46,
+            "Installing python3.10 via uv...".to_string(),
+        );
+        step_install_python()?;
 
-    emit(SetupStep::Venv, 58, "Setting up .venv...".to_string());
-    step_create_venv()?;
+        emit(SetupStep::Venv, 58, "Setting up .venv...".to_string());
+        step_create_venv()?;
 
-    emit(
-        SetupStep::Dependencies,
-        70,
-        "Installing python dependencies...".to_string(),
-    );
-    step_install_packages()?;
+        emit(
+            SetupStep::Dependencies,
+            70,
+            "Installing python dependencies...".to_string(),
+        );
+        step_install_packages()?;
+    }
 
     emit(
         SetupStep::ExtractScripts,
@@ -316,14 +362,22 @@ pub fn run_vendor_setup(
     );
     step_extract_scripts()?;
 
-    emit(
-        SetupStep::Videos,
-        90,
-        "Pre-downloading video backgrounds...".to_string(),
-    );
-    prefetch_one_per_flavor(|detail| {
-        emit(SetupStep::Videos, 90, detail.to_string());
-    });
+    if used_offline_bundle {
+        emit(
+            SetupStep::Videos,
+            90,
+            "Offline analyzer ready; backgrounds will download when available...".to_string(),
+        );
+    } else {
+        emit(
+            SetupStep::Videos,
+            90,
+            "Pre-downloading video backgrounds...".to_string(),
+        );
+        prefetch_one_per_flavor(|detail| {
+            emit(SetupStep::Videos, 90, detail.to_string());
+        });
+    }
 
     mark_ready()?;
     emit(SetupStep::Finish, 100, "Done".to_string());
