@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 const ANALYZE_PY: &str = include_str!("../analyzer/analyze.py");
 const SERVER_PY: &str = include_str!("../analyzer/server.py");
@@ -42,8 +43,130 @@ pub fn write_scripts(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
 
     for (name, content) in FILES {
-        std::fs::write(dir.join(name), content)?;
+        write_script(&dir.join(name), content)?;
     }
 
     Ok(())
+}
+
+fn write_script(path: &Path, content: &str) -> io::Result<()> {
+    let temporary = sibling_path(path, "download");
+    let backup = sibling_path(path, "previous");
+
+    if !path.exists() && backup.is_file() {
+        make_writable(&backup)?;
+        std::fs::rename(&backup, path)?;
+    }
+    if std::fs::read(path).ok().as_deref() == Some(content.as_bytes()) {
+        remove_generated_file(&temporary)?;
+        remove_generated_file(&backup)?;
+        return Ok(());
+    }
+
+    remove_generated_file(&temporary)?;
+    let mut file = std::fs::File::create(&temporary)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+
+    remove_generated_file(&backup)?;
+    if path.is_file() {
+        make_writable(path)?;
+        if let Err(error) = std::fs::rename(path, &backup) {
+            let _ = remove_generated_file(&temporary);
+            return Err(error);
+        }
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::rename(&backup, path);
+        let _ = remove_generated_file(&temporary);
+        return Err(error);
+    }
+    remove_generated_file(&backup)?;
+    Ok(())
+}
+
+fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
+    let name = path
+        .file_name()
+        .expect("embedded analyzer scripts always have a file name")
+        .to_string_lossy();
+    path.with_file_name(format!(".{name}.{suffix}"))
+}
+
+fn remove_generated_file(path: &Path) -> io::Result<()> {
+    if path.exists() {
+        make_writable(path)?;
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn make_writable(path: &Path) -> io::Result<()> {
+    if path.exists() {
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        if permissions.readonly() {
+            permissions.set_readonly(false);
+            std::fs::set_permissions(path, permissions)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn make_writable(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MELODY_PY, SERVER_PY, WHISPER_COMPAT_PY, make_writable, write_scripts};
+
+    #[test]
+    fn refreshes_read_only_scripts_and_continues_with_the_remaining_files() {
+        let root = std::env::temp_dir().join(format!(
+            "nightingale-analyzer-scripts-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let blocked = root.join("whisper_compat.py");
+        std::fs::write(&blocked, "stale").unwrap();
+        let mut permissions = std::fs::metadata(&blocked).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&blocked, permissions).unwrap();
+        std::fs::write(root.join("melody.py"), "also stale").unwrap();
+
+        write_scripts(&root).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&blocked).unwrap(),
+            WHISPER_COMPAT_PY
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("melody.py")).unwrap(),
+            MELODY_PY
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skips_an_identical_read_only_script() {
+        let root = std::env::temp_dir().join(format!(
+            "nightingale-analyzer-scripts-identical-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let identical = root.join("server.py");
+        std::fs::write(&identical, SERVER_PY).unwrap();
+        let mut permissions = std::fs::metadata(&identical).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&identical, permissions).unwrap();
+
+        write_scripts(&root).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&identical).unwrap(), SERVER_PY);
+        make_writable(&identical).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
