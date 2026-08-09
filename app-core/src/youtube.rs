@@ -25,6 +25,13 @@ const TITLE_NOISE_PATTERN: &str = concat!(
     r"lyrics?|lyric\s+video|visualizer|full|hd|4k)[^)\]]*(?:\)|\])\s*$"
 );
 
+const EMBED_METADATA_RULES: &[&str] = &[
+    "%(artist,creator,uploader,channel|Unknown Artist)s:%(meta_artist)s",
+    "%(track,title|Unknown Title)s:%(meta_title)s",
+    "%(release_year,release_date>%Y,upload_date>%Y|Unknown Year)s:%(meta_date)s",
+    "%(album,playlist_title|)s:%(meta_album)s",
+];
+
 #[derive(Debug, Clone, Serialize)]
 pub struct YoutubeImportResult {
     pub downloaded: Vec<PathBuf>,
@@ -111,7 +118,11 @@ pub fn import_youtube(url: &str) -> Result<YoutubeImportResult, String> {
         .arg("--replace-in-metadata")
         .arg("artist,uploader,channel")
         .arg(r"(?i)\s+-\s+Topic$")
-        .arg("")
+        .arg("");
+    for rule in EMBED_METADATA_RULES {
+        command.arg("--parse-metadata").arg(rule);
+    }
+    command
         .arg("--print-to-file")
         .arg("after_move:%(filepath)j")
         .arg(&result_file)
@@ -317,7 +328,7 @@ fn mark_executable(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_youtube_url;
+    use super::{EMBED_METADATA_RULES, validate_youtube_url};
 
     #[test]
     fn accepts_video_and_playlist_urls() {
@@ -330,5 +341,18 @@ mod tests {
     fn rejects_non_youtube_urls() {
         assert!(validate_youtube_url("https://example.com/watch?v=example").is_err());
         assert!(validate_youtube_url("not a url").is_err());
+    }
+
+    #[test]
+    fn maps_normalized_song_fields_into_embedded_media_tags() {
+        assert_eq!(
+            EMBED_METADATA_RULES,
+            [
+                "%(artist,creator,uploader,channel|Unknown Artist)s:%(meta_artist)s",
+                "%(track,title|Unknown Title)s:%(meta_title)s",
+                "%(release_year,release_date>%Y,upload_date>%Y|Unknown Year)s:%(meta_date)s",
+                "%(album,playlist_title|)s:%(meta_album)s",
+            ]
+        );
     }
 }

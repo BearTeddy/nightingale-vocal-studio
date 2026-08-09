@@ -89,6 +89,9 @@ pub fn startup() -> Result<(), String> {
 
     let cache = CacheDir::new();
 
+    let mut songs = library_db::load_all_songs().unwrap_or_default();
+    source::folder::refresh_local_video_sidecars(&mut songs, &cache);
+
     if let Err(e) = library_db::rewrite_legacy_jellyfin_paths(&cache.path) {
         tracing::warn!("Failed to migrate legacy Jellyfin paths: {e}");
     }

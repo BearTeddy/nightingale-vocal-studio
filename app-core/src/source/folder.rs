@@ -11,7 +11,7 @@ use walkdir::WalkDir;
 use crate::cache::CacheDir;
 use crate::error::NightingaleError;
 use crate::library_db::{self, PlaylistDefinition, PlaylistSongKeyKind};
-use crate::song::{Song, build_song};
+use crate::song::{Song, SongOrigin, build_song, refresh_youtube_sidecar_metadata};
 use crate::usdx;
 
 use super::{MediaSource, SCAN_BATCH_SIZE, ScanContext, SourceKind, flush_batch};
@@ -59,8 +59,13 @@ impl MediaSource for FolderSource {
         let _ = library_db::delete_songs_not_in_paths(&paths);
         let _ = library_db::update_library_meta(&folder_label, media_files.len());
 
-        let already_processed: HashSet<String> =
-            library_db::load_song_path_strings().unwrap_or_default();
+        let mut existing_songs = library_db::load_all_songs().unwrap_or_default();
+        let already_processed: HashSet<String> = existing_songs
+            .iter()
+            .map(|song| song.path.to_string_lossy().into_owned())
+            .collect();
+
+        refresh_local_video_sidecars(&mut existing_songs, ctx.cache);
 
         let pending: Vec<_> = media_files
             .into_iter()
@@ -104,6 +109,22 @@ impl MediaSource for FolderSource {
         _cache: &CacheDir,
     ) -> Result<PathBuf, NightingaleError> {
         Ok(song.path.clone())
+    }
+}
+
+pub(crate) fn refresh_local_video_sidecars(songs: &mut [Song], cache: &CacheDir) {
+    for song in songs {
+        if !song.is_video || !matches!(&song.origin, SongOrigin::LocalFile) {
+            continue;
+        }
+        if refresh_youtube_sidecar_metadata(song, cache)
+            && let Err(error) = library_db::update_song_fields(&song.file_hash, song)
+        {
+            warn!(
+                "Failed to refresh YouTube metadata for {}: {error}",
+                song.path.display()
+            );
+        }
     }
 }
 
