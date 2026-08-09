@@ -454,6 +454,106 @@ fn cleanup_completed_export_partial(path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+struct RecordingExportPaths {
+    mix: PathBuf,
+    mix_partial: PathBuf,
+    video: PathBuf,
+    video_partial: PathBuf,
+}
+
+fn recording_export_paths(take: &RecordingTake) -> Option<RecordingExportPaths> {
+    let directory = Path::new(&take.vocal_path).parent()?;
+    let stem = safe_component(
+        &format!("{} - {}", take.artist, take.title),
+        "Nightingale Take",
+    );
+    Some(RecordingExportPaths {
+        mix: directory.join(format!("{stem} - performance.m4a")),
+        mix_partial: directory.join(format!("{stem} - performance.partial.m4a")),
+        video: directory.join(format!("{stem} - performance.mp4")),
+        video_partial: directory.join(format!("{stem} - performance.partial.mp4")),
+    })
+}
+
+fn reconcile_recording_exports(take: &mut RecordingTake) -> Result<bool, String> {
+    let Some(paths) = recording_export_paths(take) else {
+        return Ok(false);
+    };
+    let mut changed = false;
+    let mut audio_interrupted = false;
+    let mut video_interrupted = false;
+
+    for (partial, final_path, interrupted) in [
+        (&paths.mix_partial, &paths.mix, &mut audio_interrupted),
+        (&paths.video_partial, &paths.video, &mut video_interrupted),
+    ] {
+        if !partial.is_file() {
+            continue;
+        }
+        if !final_path.is_file() {
+            *interrupted = true;
+        }
+        std::fs::remove_file(partial).map_err(|error| {
+            format!(
+                "Failed to remove interrupted export {}: {error}",
+                partial.display()
+            )
+        })?;
+    }
+
+    let had_mix = take
+        .mix_path
+        .as_deref()
+        .is_some_and(|path| Path::new(path).is_file());
+    let had_video = take
+        .video_path
+        .as_deref()
+        .is_some_and(|path| Path::new(path).is_file());
+    let recovered_mix = !had_mix && paths.mix.is_file();
+    let recovered_video = !had_video && paths.video.is_file();
+    if recovered_mix {
+        take.mix_path = Some(paths.mix.to_string_lossy().into_owned());
+        changed = true;
+    }
+    if recovered_video {
+        take.video_path = Some(paths.video.to_string_lossy().into_owned());
+        changed = true;
+    }
+
+    let recovery_message = if audio_interrupted && video_interrupted {
+        Some(
+            "Previous performance export was interrupted. The dry vocal is safe; retry the export."
+                .to_string(),
+        )
+    } else if audio_interrupted {
+        Some(
+            "Previous performance mix export was interrupted. The dry vocal is safe; create the mix again."
+                .to_string(),
+        )
+    } else if video_interrupted {
+        Some(
+            "Previous performance video export was interrupted. The audio mix is safe; export the video again."
+                .to_string(),
+        )
+    } else if recovered_mix || recovered_video {
+        Some("Recovered a completed performance export after Nightingale was interrupted.".into())
+    } else {
+        None
+    };
+    if let Some(message) = recovery_message {
+        if take.error.as_deref() != Some(&message) {
+            take.error = Some(message);
+            changed = true;
+        }
+        if (recovered_mix || recovered_video) && take.status != "ready" {
+            take.status = "ready".into();
+            changed = true;
+        }
+    }
+
+    Ok(changed)
+}
+
 fn legacy_recovered_path(partial_path: &Path) -> PathBuf {
     let file_name = partial_path
         .file_name()
@@ -576,6 +676,12 @@ fn reconnect_finalized_recording_history(status: &str) {
                         false
                     }
                 };
+                match reconcile_recording_exports(&mut take) {
+                    Ok(changed) => take_changed |= changed,
+                    Err(error) => {
+                        tracing::warn!("Failed to recover interrupted recording export: {error}")
+                    }
+                }
                 let has_saved_media = Path::new(&take.vocal_path).is_file()
                     || take
                         .mix_path
@@ -764,11 +870,12 @@ pub fn new_exercise_session_id() -> String {
 mod tests {
     use super::{
         ExportRecordingRequest, RecordingTake, TransportSegment, cleanup_completed_export_partial,
-        hydrate_recorded_samples_from_wav, recording_audio_codec_args, recording_mix_filter,
-        recording_video_codec_args, recover_recording_take, recovery_session_end_time,
-        repair_partial_wav_header, safe_component,
+        hydrate_recorded_samples_from_wav, reconcile_recording_exports, recording_audio_codec_args,
+        recording_mix_filter, recording_video_codec_args, recover_recording_take,
+        recovery_session_end_time, repair_partial_wav_header, safe_component,
     };
     use crate::vendor::{ffmpeg_path, silent_command};
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -799,6 +906,89 @@ mod tests {
         assert!(!cleanup_completed_export_partial(&orphan).unwrap());
         assert!(orphan.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn removes_an_interrupted_mix_fragment_without_touching_the_vocal_master() {
+        let root = std::env::temp_dir().join(format!(
+            "nightingale-export-recovery-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let vocal = root.join("Artist - Song - vocal.wav");
+        let partial = root.join("Artist - Song - performance.partial.m4a");
+        std::fs::write(&vocal, b"dry vocal").unwrap();
+        std::fs::write(&partial, b"incomplete export").unwrap();
+        let mut take = recording_take_for_path(&vocal);
+
+        assert!(reconcile_recording_exports(&mut take).unwrap());
+
+        assert!(vocal.is_file());
+        assert!(!partial.exists());
+        assert_eq!(take.status, "recorded");
+        assert!(take.mix_path.is_none());
+        assert!(
+            take.error
+                .as_deref()
+                .is_some_and(|error| error.contains("dry vocal is safe"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reconnects_a_completed_mix_that_was_not_saved_to_the_database() {
+        let root = std::env::temp_dir().join(format!(
+            "nightingale-export-reconnect-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let vocal = root.join("Artist - Song - vocal.wav");
+        let mix = root.join("Artist - Song - performance.m4a");
+        let duplicate = root.join("Artist - Song - performance.partial.m4a");
+        std::fs::write(&vocal, b"dry vocal").unwrap();
+        std::fs::write(&mix, b"completed mix").unwrap();
+        std::fs::write(&duplicate, b"stale fragment").unwrap();
+        let mut take = recording_take_for_path(&vocal);
+
+        assert!(reconcile_recording_exports(&mut take).unwrap());
+
+        assert_eq!(
+            take.mix_path.as_deref(),
+            Some(mix.to_string_lossy().as_ref())
+        );
+        assert_eq!(take.status, "ready");
+        assert!(!duplicate.exists());
+        assert!(
+            take.error
+                .as_deref()
+                .is_some_and(|error| error.contains("Recovered a completed"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn recording_take_for_path(vocal: &Path) -> RecordingTake {
+        RecordingTake {
+            id: "take-export-recovery".into(),
+            session_id: "session-export-recovery".into(),
+            song_hash: "song".into(),
+            profile: "Guest".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            vocal_path: vocal.to_string_lossy().into_owned(),
+            partial_path: vocal
+                .with_extension("partial.wav")
+                .to_string_lossy()
+                .into_owned(),
+            mix_path: None,
+            video_path: None,
+            status: "recorded".into(),
+            sample_rate: 48_000,
+            pre_roll_samples: 48_000,
+            recorded_samples: 48_000,
+            playback_start_sec: 0.0,
+            created_at: 1_000,
+            error: None,
+        }
     }
 
     #[test]

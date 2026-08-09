@@ -37,7 +37,7 @@ import {
 } from "@/lib/interval-listening";
 import { buildListeningSession } from "@/lib/listening-session";
 import { recordingsDirectoryFromDataPath } from "@/lib/recording-path";
-import { canRecoverRecordingMix } from "@/lib/recording-recovery";
+import { canRecoverRecordingMix, recordingTakeNotice } from "@/lib/recording-recovery";
 import { diagnoseMicInput } from "@/lib/mic/input-diagnostic";
 import { DEFAULT_MIC_LATENCY_COMPENSATION_SEC } from "@/lib/pitch/constants";
 import { freqToSemitone, VisualPitchTracker } from "@/lib/pitch/state";
@@ -1961,6 +1961,9 @@ export function VocalStudioPage() {
                     ? `${take.artist} - ${take.title}`
                     : take.title
                   : "Recording";
+                const recordingNotice = take
+                  ? recordingTakeNotice(take.status, take.mix_path, take.error)
+                  : null;
                 return (
                   <div
                     key={session.id}
@@ -1976,25 +1979,16 @@ export function VocalStudioPage() {
                           {take.artist.trim() ? `${take.artist} - ${take.title}` : take.title}
                         </p>
                       )}
-                      {take?.status === "recovered" && (
+                      {recordingNotice && (
                         <p
-                          className="truncate text-xs text-amber-600 dark:text-amber-400"
-                          title={take.error ?? undefined}
+                          className={`truncate text-xs ${
+                            recordingNotice.tone === "error"
+                              ? "text-destructive"
+                              : "text-amber-600 dark:text-amber-400"
+                          }`}
+                          title={recordingNotice.label}
                         >
-                          Recovered after interruption
-                        </p>
-                      )}
-                      {take?.status === "failed" && (
-                        <p
-                          className="truncate text-xs text-destructive"
-                          title={take.error ?? undefined}
-                        >
-                          Recording incomplete
-                        </p>
-                      )}
-                      {take?.status === "recorded" && !take.mix_path && (
-                        <p className="truncate text-xs text-amber-600 dark:text-amber-400">
-                          Vocal saved, mix not created
+                          {recordingNotice.label}
                         </p>
                       )}
                     </div>
