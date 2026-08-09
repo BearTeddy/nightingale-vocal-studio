@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     fs::File,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
@@ -65,9 +66,124 @@ pub struct VerifiedSidecarPayload {
     pub entries: Vec<PackedEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtomicDirectorySwap {
+    pub partial: PathBuf,
+    pub backup: PathBuf,
+}
+
 fn safe_file_name(name: &str) -> bool {
     let path = Path::new(name);
     path.components().count() == 1 && matches!(path.components().next(), Some(Component::Normal(_)))
+}
+
+fn atomic_sibling_path(destination: &Path, suffix: &str) -> Result<PathBuf, String> {
+    let parent = destination.parent().ok_or_else(|| {
+        format!(
+            "Atomic directory destination is invalid: {}",
+            destination.display()
+        )
+    })?;
+    let name = destination.file_name().ok_or_else(|| {
+        format!(
+            "Atomic directory destination is invalid: {}",
+            destination.display()
+        )
+    })?;
+    let mut sibling = OsString::from(".");
+    sibling.push(name);
+    sibling.push(suffix);
+    Ok(parent.join(sibling))
+}
+
+pub fn prepare_atomic_directory_swap(
+    destination: impl AsRef<Path>,
+) -> Result<AtomicDirectorySwap, String> {
+    let destination = destination.as_ref();
+    let parent = destination.parent().ok_or_else(|| {
+        format!(
+            "Atomic directory destination is invalid: {}",
+            destination.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
+
+    let swap = AtomicDirectorySwap {
+        partial: atomic_sibling_path(destination, ".partial")?,
+        backup: atomic_sibling_path(destination, ".backup")?,
+    };
+    if !destination.exists() && swap.backup.exists() {
+        std::fs::rename(&swap.backup, destination).map_err(|error| {
+            format!(
+                "Could not restore interrupted directory {} from {}: {error}",
+                destination.display(),
+                swap.backup.display()
+            )
+        })?;
+    } else if destination.exists() && swap.backup.exists() {
+        std::fs::remove_dir_all(&swap.backup).map_err(|error| {
+            format!(
+                "Could not remove stale directory backup {}: {error}",
+                swap.backup.display()
+            )
+        })?;
+    }
+    if swap.partial.exists() {
+        std::fs::remove_dir_all(&swap.partial).map_err(|error| {
+            format!(
+                "Could not remove interrupted partial directory {}: {error}",
+                swap.partial.display()
+            )
+        })?;
+    }
+    Ok(swap)
+}
+
+pub fn activate_atomic_directory_swap(
+    destination: impl AsRef<Path>,
+    swap: &AtomicDirectorySwap,
+) -> Result<(), String> {
+    let destination = destination.as_ref();
+    if !swap.partial.is_dir() {
+        return Err(format!(
+            "Atomic partial directory is missing: {}",
+            swap.partial.display()
+        ));
+    }
+    if swap.backup.exists() {
+        return Err(format!(
+            "Atomic backup directory unexpectedly exists: {}",
+            swap.backup.display()
+        ));
+    }
+    if destination.exists() {
+        std::fs::rename(destination, &swap.backup).map_err(|error| {
+            format!(
+                "Could not preserve existing directory {}: {error}",
+                destination.display()
+            )
+        })?;
+    }
+    if let Err(error) = std::fs::rename(&swap.partial, destination) {
+        let restore = if swap.backup.exists() {
+            std::fs::rename(&swap.backup, destination).err()
+        } else {
+            None
+        };
+        return Err(match restore {
+            Some(restore_error) => format!(
+                "Could not activate directory {}: {error}; restoring the previous directory also failed: {restore_error}",
+                destination.display()
+            ),
+            None => format!(
+                "Could not activate directory {}: {error}",
+                destination.display()
+            ),
+        });
+    }
+    let _ = std::fs::remove_dir_all(&swap.backup);
+    Ok(())
 }
 
 fn partial_path(path: &Path) -> Result<PathBuf, String> {
@@ -103,6 +219,15 @@ fn sha256_range(path: &Path, offset: u64, bytes: u64) -> Result<String, String> 
         remaining -= read as u64;
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+pub fn sha256_file(path: impl AsRef<Path>) -> Result<String, String> {
+    let path = path.as_ref();
+    let bytes = path
+        .metadata()
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?
+        .len();
+    sha256_range(path, 0, bytes)
 }
 
 fn append_source(
@@ -358,46 +483,19 @@ pub fn install_sidecar_payload(
 ) -> Result<VerifiedSidecarPayload, String> {
     let root = root.as_ref();
     let destination = destination.as_ref();
+    let swap = prepare_atomic_directory_swap(destination)?;
     let verified = verify_sidecar_payload(root, expected_app_version, role)?;
-    let parent = destination
-        .parent()
-        .ok_or_else(|| format!("Sidecar destination is invalid: {}", destination.display()))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
-    let name = destination
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("Sidecar destination is invalid: {}", destination.display()))?;
-    let partial = parent.join(format!("{name}.partial-{}", std::process::id()));
-    let backup = parent.join(format!("{name}.backup-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&partial);
-    let _ = std::fs::remove_dir_all(&backup);
-    std::fs::create_dir_all(&partial)
-        .map_err(|error| format!("Could not create {}: {error}", partial.display()))?;
+    std::fs::create_dir_all(&swap.partial)
+        .map_err(|error| format!("Could not create {}: {error}", swap.partial.display()))?;
     for entry in &verified.entries {
-        if let Err(error) = copy_verified_sidecar_entry(root, entry, &partial.join(&entry.name)) {
-            let _ = std::fs::remove_dir_all(&partial);
+        if let Err(error) =
+            copy_verified_sidecar_entry(root, entry, &swap.partial.join(&entry.name))
+        {
+            let _ = std::fs::remove_dir_all(&swap.partial);
             return Err(error);
         }
     }
-    if destination.exists() {
-        std::fs::rename(destination, &backup).map_err(|error| {
-            format!(
-                "Could not preserve existing sidecar payload {}: {error}",
-                destination.display()
-            )
-        })?;
-    }
-    if let Err(error) = std::fs::rename(&partial, destination) {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, destination);
-        }
-        return Err(format!(
-            "Could not activate sidecar payload {}: {error}",
-            destination.display()
-        ));
-    }
-    let _ = std::fs::remove_dir_all(&backup);
+    activate_atomic_directory_swap(destination, &swap)?;
     Ok(verified)
 }
 
@@ -767,7 +865,8 @@ pub fn extract_packed_entry(
 mod tests {
     use super::{
         PackedRole, extract_packed_entry, install_sidecar_payload, pack_offline_installer,
-        pack_offline_installer_with_models, verify_packed_installer, verify_sidecar_payload,
+        pack_offline_installer_with_models, prepare_atomic_directory_swap, verify_packed_installer,
+        verify_sidecar_payload,
     };
     use sha2::{Digest, Sha256};
     use std::{
@@ -931,6 +1030,31 @@ mod tests {
             std::fs::read(destination.join("models.tar.zst.part001")).unwrap(),
             b"weights"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restores_a_stranded_sidecar_backup_before_verifying_new_media() {
+        let (root, _) = fixture();
+        let models = add_models_fixture(&root);
+        let destination = root.join("installed-models-\u{6a21}");
+        install_sidecar_payload(&models, &destination, "1.0.0", PackedRole::Models).unwrap();
+
+        let swap = prepare_atomic_directory_swap(&destination).unwrap();
+        std::fs::rename(&destination, &swap.backup).unwrap();
+        std::fs::create_dir_all(&swap.partial).unwrap();
+        std::fs::write(swap.partial.join("incomplete.txt"), b"partial").unwrap();
+        std::fs::write(models.join("models.tar.zst.part001"), b"damaged").unwrap();
+
+        assert!(
+            install_sidecar_payload(&models, &destination, "1.0.0", PackedRole::Models).is_err()
+        );
+        assert_eq!(
+            std::fs::read(destination.join("models.tar.zst.part001")).unwrap(),
+            b"weights"
+        );
+        assert!(!swap.backup.exists());
+        assert!(!swap.partial.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

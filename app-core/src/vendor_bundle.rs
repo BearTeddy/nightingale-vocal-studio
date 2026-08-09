@@ -893,12 +893,43 @@ fn sibling_path(destination: &Path, suffix: &str) -> Result<PathBuf, String> {
     Ok(parent.join(format!(".{name}.{suffix}")))
 }
 
+fn recover_atomic_directory(
+    destination: &Path,
+    partial: &Path,
+    backup: &Path,
+) -> Result<(), String> {
+    if !destination.exists() && backup.exists() {
+        std::fs::rename(backup, destination).map_err(|error| {
+            format!(
+                "Could not restore interrupted offline directory {} from {}: {error}",
+                destination.display(),
+                backup.display()
+            )
+        })?;
+    } else if destination.exists() && backup.exists() {
+        std::fs::remove_dir_all(backup).map_err(|error| {
+            format!(
+                "Could not remove stale offline directory backup {}: {error}",
+                backup.display()
+            )
+        })?;
+    }
+    if partial.exists() {
+        std::fs::remove_dir_all(partial).map_err(|error| {
+            format!(
+                "Could not remove interrupted offline directory {}: {error}",
+                partial.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn install_offline_payload_bundle(
     bundle: &OfflineVendorBundle,
     destination: impl AsRef<Path>,
     kind: OfflinePayloadKind,
 ) -> Result<OfflineVendorManifest, String> {
-    let manifest = read_and_verify_manifest(bundle, kind)?;
     let destination = destination.as_ref();
     let parent = destination
         .parent()
@@ -907,8 +938,8 @@ fn install_offline_payload_bundle(
         .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
     let partial = sibling_path(destination, "offline-partial")?;
     let backup = sibling_path(destination, "offline-backup")?;
-    let _ = std::fs::remove_dir_all(&partial);
-    let _ = std::fs::remove_dir_all(&backup);
+    recover_atomic_directory(destination, &partial, &backup)?;
+    let manifest = read_and_verify_manifest(bundle, kind)?;
     std::fs::create_dir_all(&partial)
         .map_err(|error| format!("Could not create {}: {error}", partial.display()))?;
 
@@ -998,7 +1029,8 @@ pub fn install_offline_model_bundle(
 mod tests {
     use super::{
         OfflineModelBundle, OfflinePayloadKind, OfflineVendorBundle, install_offline_model_bundle,
-        install_offline_vendor_bundle, stage_offline_model_bundle, stage_offline_vendor_bundle,
+        install_offline_vendor_bundle, sibling_path, stage_offline_model_bundle,
+        stage_offline_vendor_bundle,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1044,7 +1076,7 @@ mod tests {
             root.join("huggingface")
                 .join("hub")
                 .join("models--fixture")
-                .join("unicode-花束.json"),
+                .join("unicode-\u{82b1}\u{675f}.json"),
             root.join("audio_separator").join("karaoke.ckpt"),
             root.join("torch")
                 .join("hub")
@@ -1129,6 +1161,47 @@ mod tests {
     }
 
     #[test]
+    fn restores_a_stranded_backup_before_rejecting_new_media() {
+        let root = temp_root("offline-recovery");
+        let source = root.join("source");
+        let staged = root.join("staged");
+        let destination = root.join("installed").join("vendor");
+        create_fixture(&source);
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(destination.join("keep.txt"), b"known good").unwrap();
+
+        let bundle = stage_offline_vendor_bundle(&source, &staged).unwrap();
+        let backup = sibling_path(&destination, "offline-backup").unwrap();
+        let partial = sibling_path(&destination, "offline-partial").unwrap();
+        std::fs::rename(&destination, &backup).unwrap();
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join("incomplete.txt"), b"partial").unwrap();
+        let mut archive = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&bundle.archives[0])
+            .unwrap();
+        use std::io::Write;
+        archive.write_all(b"corrupt").unwrap();
+
+        let error = install_offline_vendor_bundle(
+            &OfflineVendorBundle {
+                archives: bundle.archives,
+                manifest: bundle.manifest,
+            },
+            &destination,
+        )
+        .unwrap_err();
+        assert!(error.contains("size does not match"));
+        assert_eq!(
+            std::fs::read(destination.join("keep.txt")).unwrap(),
+            b"known good"
+        );
+        assert!(!backup.exists());
+        assert!(!partial.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn stages_and_atomically_installs_model_caches_without_transient_files() {
         let root = temp_root("offline-models");
         let source = root.join("source");
@@ -1155,7 +1228,7 @@ mod tests {
                 .join("huggingface")
                 .join("hub")
                 .join("models--fixture")
-                .join("unicode-花束.json")
+                .join("unicode-\u{82b1}\u{675f}.json")
                 .is_file()
         );
         assert!(

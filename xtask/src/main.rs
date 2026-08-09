@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
@@ -9,8 +10,9 @@ use app_core::{
     verify_offline_vendor_runtime, OfflineModelBundle, OfflineVendorBundle, StagedOfflineVendor,
 };
 use nightingale_offline_installer::{
-    install_sidecar_payload, pack_offline_installer, pack_offline_installer_with_models,
-    PackedIndex, PackedRole,
+    activate_atomic_directory_swap, install_sidecar_payload, pack_offline_installer,
+    pack_offline_installer_with_models, prepare_atomic_directory_swap, sha256_file, PackedIndex,
+    PackedRole, VerifiedSidecarPayload,
 };
 
 const MAX_WINDOWS_EXECUTABLE_BYTES: u64 = 4_000_000_000;
@@ -474,6 +476,54 @@ fn sidecar_package_root(output: &Path) -> Result<PathBuf, String> {
     Ok(output.with_file_name(stem))
 }
 
+fn checksum_relative_path(path: &Path) -> Result<String, String> {
+    let value = path.to_string_lossy().replace('\\', "/");
+    if value.contains('\r') || value.contains('\n') {
+        return Err(format!(
+            "Offline package filename cannot be represented in SHA256SUMS.txt: {}",
+            path.display()
+        ));
+    }
+    Ok(value)
+}
+
+fn write_complete_package_checksums(
+    package_root: &Path,
+    launcher_name: &OsStr,
+    models: &VerifiedSidecarPayload,
+) -> Result<(), String> {
+    let launcher_relative = PathBuf::from(launcher_name);
+    let readme_relative = PathBuf::from("README.txt");
+    let mut checksums = vec![
+        (
+            checksum_relative_path(&launcher_relative)?,
+            sha256_file(package_root.join(&launcher_relative))?,
+        ),
+        (
+            checksum_relative_path(&readme_relative)?,
+            sha256_file(package_root.join(&readme_relative))?,
+        ),
+    ];
+    checksums.extend(
+        models
+            .entries
+            .iter()
+            .map(|entry| {
+                let relative = Path::new("offline-models").join(&entry.name);
+                checksum_relative_path(&relative).map(|relative| (relative, entry.sha256.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    checksums.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let manifest = checksums
+        .into_iter()
+        .map(|(name, sha256)| format!("{sha256}  {name}\n"))
+        .collect::<String>();
+    std::fs::write(package_root.join("SHA256SUMS.txt"), manifest)
+        .map_err(|error| format!("Could not write offline package checksums: {error}"))
+}
+
 fn pack_windows_sidecar_installer(
     stub: &Path,
     setup: &Path,
@@ -490,75 +540,47 @@ fn pack_windows_sidecar_installer(
     })?;
     std::fs::create_dir_all(parent)
         .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
-    let package_name = package_root
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            format!(
-                "Offline package name is invalid: {}",
-                package_root.display()
-            )
-        })?;
-    let partial = parent.join(format!(".{package_name}.partial-{}", std::process::id()));
-    let backup = parent.join(format!(".{package_name}.backup-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&partial);
-    let _ = std::fs::remove_dir_all(&backup);
-    std::fs::create_dir_all(&partial)
-        .map_err(|error| format!("Could not create {}: {error}", partial.display()))?;
+    let swap = prepare_atomic_directory_swap(&package_root)?;
+    std::fs::create_dir_all(&swap.partial)
+        .map_err(|error| format!("Could not create {}: {error}", swap.partial.display()))?;
     let launcher_name = output.file_name().ok_or_else(|| {
         format!(
             "Offline installer filename is invalid: {}",
             output.display()
         )
     })?;
-    let launcher = partial.join(launcher_name);
+    let launcher = swap.partial.join(launcher_name);
 
     let result = (|| {
         let index = pack_offline_installer(stub, setup, vendor_root, &launcher)?;
-        install_sidecar_payload(
+        let models = install_sidecar_payload(
             models_root,
-            partial.join("offline-models"),
+            swap.partial.join("offline-models"),
             &index.app_version,
             PackedRole::Models,
         )?;
         std::fs::write(
-            partial.join("README.txt"),
+            swap.partial.join("README.txt"),
             concat!(
                 "Nightingale complete offline installer\n\n",
                 "Keep this folder together and run the .exe inside it.\n",
                 "The launcher verifies every analyzer and model component before installation.\n",
+                "SHA256SUMS.txt verifies every distributed file in this folder.\n",
                 "Use --verify-only from a terminal to check the media without installing.\n",
             ),
         )
         .map_err(|error| format!("Could not write offline package instructions: {error}"))?;
+        write_complete_package_checksums(&swap.partial, launcher_name, &models)?;
         Ok::<_, String>(index)
     })();
     let index = match result {
         Ok(index) => index,
         Err(error) => {
-            let _ = std::fs::remove_dir_all(&partial);
+            let _ = std::fs::remove_dir_all(&swap.partial);
             return Err(error);
         }
     };
-
-    if package_root.exists() {
-        std::fs::rename(&package_root, &backup).map_err(|error| {
-            format!(
-                "Could not preserve existing offline package {}: {error}",
-                package_root.display()
-            )
-        })?;
-    }
-    if let Err(error) = std::fs::rename(&partial, &package_root) {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, &package_root);
-        }
-        return Err(format!(
-            "Could not activate offline package {}: {error}",
-            package_root.display()
-        ));
-    }
-    let _ = std::fs::remove_dir_all(&backup);
+    activate_atomic_directory_swap(&package_root, &swap)?;
     if output.is_file() {
         std::fs::remove_file(output)
             .map_err(|error| format!("Could not remove unusable {}: {error}", output.display()))?;
@@ -921,8 +943,20 @@ fn main() -> ExitCode {
 mod tests {
     use super::{
         default_offline_bundle, needs_unsigned_build_config, pnpm_program, run_staging_worker,
-        sidecar_package_root, split_offline_args,
+        sidecar_package_root, split_offline_args, write_complete_package_checksums,
     };
+    use nightingale_offline_installer::{
+        sha256_file, PackedEntry, PackedRole, VerifiedSidecarPayload,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("nightingale-{label}-{nonce}"))
+    }
 
     #[test]
     fn uses_the_windows_command_shim_when_required() {
@@ -999,6 +1033,58 @@ mod tests {
             .unwrap(),
             std::path::PathBuf::from("Nightingale_1.0.0_x64-complete-offline-setup")
         );
+    }
+
+    #[test]
+    fn complete_windows_media_writes_sorted_checksums_for_every_file() {
+        let root = temp_root("offline-checksums");
+        let models_root = root.join("offline-models");
+        std::fs::create_dir_all(&models_root).unwrap();
+        std::fs::write(root.join("launcher.exe"), b"launcher").unwrap();
+        std::fs::write(root.join("README.txt"), b"instructions").unwrap();
+        std::fs::write(models_root.join("manifest.json"), b"manifest").unwrap();
+        std::fs::write(models_root.join("models.part001"), b"weights").unwrap();
+        let models = VerifiedSidecarPayload {
+            app_version: "1.0.0".to_string(),
+            entries: vec![
+                PackedEntry {
+                    role: PackedRole::Models,
+                    name: "manifest.json".to_string(),
+                    offset: 0,
+                    bytes: 8,
+                    sha256: sha256_file(models_root.join("manifest.json")).unwrap(),
+                },
+                PackedEntry {
+                    role: PackedRole::Models,
+                    name: "models.part001".to_string(),
+                    offset: 0,
+                    bytes: 7,
+                    sha256: sha256_file(models_root.join("models.part001")).unwrap(),
+                },
+            ],
+        };
+
+        write_complete_package_checksums(&root, std::ffi::OsStr::new("launcher.exe"), &models)
+            .unwrap();
+        let manifest = std::fs::read_to_string(root.join("SHA256SUMS.txt")).unwrap();
+        let lines = manifest.lines().collect::<Vec<_>>();
+        let names = lines
+            .iter()
+            .map(|line| line.split_once("  ").unwrap().1)
+            .collect::<Vec<_>>();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted);
+        assert_eq!(lines.len(), 4);
+        assert!(lines.iter().any(|line| line.ends_with("  launcher.exe")));
+        assert!(lines
+            .iter()
+            .any(|line| line.ends_with("  offline-models/manifest.json")));
+        assert!(lines
+            .iter()
+            .any(|line| line.ends_with("  offline-models/models.part001")));
+        assert!(lines.iter().any(|line| line.ends_with("  README.txt")));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

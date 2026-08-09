@@ -4,8 +4,9 @@ use std::{
 };
 
 use nightingale_offline_installer::{
-    PackedEntry, PackedRole, extract_packed_entry, install_sidecar_payload,
-    verify_packed_installer, verify_sidecar_payload,
+    PackedEntry, PackedRole, activate_atomic_directory_swap, extract_packed_entry,
+    install_sidecar_payload, prepare_atomic_directory_swap, verify_packed_installer,
+    verify_sidecar_payload,
 };
 
 fn install_directory() -> Result<PathBuf, String> {
@@ -102,6 +103,8 @@ fn install_payload(
     label: &str,
     required: bool,
 ) -> Result<Option<PathBuf>, String> {
+    let destination = install_dir.join(directory_name);
+    let swap = prepare_atomic_directory_swap(&destination)?;
     if !entries.iter().any(|entry| entry.role == role) {
         return if required {
             Err(format!("Offline installer {label} payload is missing"))
@@ -109,47 +112,24 @@ fn install_payload(
             Ok(None)
         };
     }
-    let destination = install_dir.join(directory_name);
-    let partial = install_dir.join(format!("{directory_name}.partial-{}", std::process::id()));
-    let backup = install_dir.join(format!("{directory_name}.backup-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&partial);
-    let _ = std::fs::remove_dir_all(&backup);
-    std::fs::create_dir_all(&partial)
-        .map_err(|error| format!("Could not create {}: {error}", partial.display()))?;
+    std::fs::create_dir_all(&swap.partial)
+        .map_err(|error| format!("Could not create {}: {error}", swap.partial.display()))?;
 
     let result = (|| {
         for entry in entries.iter().filter(|entry| entry.role == role) {
             println!("Installing offline {label} component {}...", entry.name);
-            extract_packed_entry(installer, entry, partial.join(&entry.name))?;
+            extract_packed_entry(installer, entry, swap.partial.join(&entry.name))?;
         }
-        if !partial.join("manifest.json").is_file() {
+        if !swap.partial.join("manifest.json").is_file() {
             return Err(format!("Offline {label} manifest was not installed"));
         }
         Ok::<_, String>(())
     })();
     if let Err(error) = result {
-        let _ = std::fs::remove_dir_all(&partial);
+        let _ = std::fs::remove_dir_all(&swap.partial);
         return Err(error);
     }
-
-    if destination.exists() {
-        std::fs::rename(&destination, &backup).map_err(|error| {
-            format!(
-                "Could not preserve existing offline resources {}: {error}",
-                destination.display()
-            )
-        })?;
-    }
-    if let Err(error) = std::fs::rename(&partial, &destination) {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, &destination);
-        }
-        return Err(format!(
-            "Could not activate offline resources {}: {error}",
-            destination.display()
-        ));
-    }
-    let _ = std::fs::remove_dir_all(&backup);
+    activate_atomic_directory_swap(&destination, &swap)?;
     Ok(Some(destination))
 }
 
