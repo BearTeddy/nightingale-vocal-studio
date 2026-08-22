@@ -3,7 +3,8 @@
  * rAF tick that notifies subscribers for visuals (background sync, lyrics, HUD).
  * The returned API object is referentially stable across renders when its fields are unchanged.
  *
- * Graph: instrumental buffer → destination; vocals buffer → gain (guide level) → destination.
+ * Graph: instrumental buffer → master gain → destination;
+ * vocals buffer → guide gain → master gain → destination.
  * Playback position is derived from AudioContext.currentTime and a (offset, contextTimeAtStart)
  * pair because BufferSourceNode is one-shot: pause/seek recreate sources rather than mutating time.
  */
@@ -23,6 +24,7 @@ export interface AudioPlayer {
   isFinished: boolean;
   error: string | null;
   guideVolume: number;
+  masterVolume: number;
   /** False for LRC-provided songs without stems: the original mix plays and
    * there is no separate guide vocal track to control. */
   guideAvailable: boolean;
@@ -31,6 +33,7 @@ export interface AudioPlayer {
   resume: () => void;
   seek: (time: number) => void;
   setGuideVolume: (v: number) => void;
+  setMasterVolume: (v: number) => void;
   cleanup: () => void;
   getVocalsBuffer: () => AudioBuffer | null;
   getScoringBuffer: () => AudioBuffer | null;
@@ -54,6 +57,7 @@ export function useAudioPlayer(
   const instrumentalSrcRef = useRef<AudioBufferSourceNode | null>(null);
   const vocalsSrcRef = useRef<AudioBufferSourceNode | null>(null);
   const vocalsGainRef = useRef<GainNode | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
   const rafRef = useRef<number>(0);
   const currentTimeRef = useRef(0);
   const subscribersRef = useRef<Set<TimeSubscriber>>(new Set());
@@ -71,6 +75,7 @@ export function useAudioPlayer(
   const [isFinished, setIsFinished] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [guideVolume, setGuideVolumeState] = useState(initialGuideVolume);
+  const [masterVolume, setMasterVolumeState] = useState(1);
   const [guideAvailable, setGuideAvailable] = useState(true);
 
   const getVocalsBuffer = useCallback(() => vocalsBufRef.current, []);
@@ -129,8 +134,9 @@ export function useAudioPlayer(
       const instBuf = instrumentalBufRef.current;
       const vocBuf = vocalsBufRef.current;
       const gainNode = vocalsGainRef.current;
+      const masterGainNode = masterGainRef.current;
 
-      if (!ctx || !instBuf) {
+      if (!ctx || !instBuf || !masterGainNode) {
         return;
       }
 
@@ -140,7 +146,7 @@ export function useAudioPlayer(
 
       const instSrc = ctx.createBufferSource();
       instSrc.buffer = instBuf;
-      instSrc.connect(ctx.destination);
+      instSrc.connect(masterGainNode);
 
       instSrc.onended = () => {
         if (!cancelledRef.current && playingRef.current && instrumentalSrcRef.current === instSrc) {
@@ -189,9 +195,14 @@ export function useAudioPlayer(
     const ctx = new AudioContext();
     ctxRef.current = ctx;
 
+    const masterGainNode = ctx.createGain();
+    masterGainNode.gain.value = 1;
+    masterGainNode.connect(ctx.destination);
+    masterGainRef.current = masterGainNode;
+
     const gainNode = ctx.createGain();
     gainNode.gain.value = Math.max(0, Math.min(1, initialGuideVolume));
-    gainNode.connect(ctx.destination);
+    gainNode.connect(masterGainNode);
     vocalsGainRef.current = gainNode;
 
     const isCancelled = () => cancelled || cancelledRef.current;
@@ -290,6 +301,7 @@ export function useAudioPlayer(
       instrumentalBufRef.current = null;
       vocalsBufRef.current = null;
       vocalsGainRef.current = null;
+      masterGainRef.current = null;
       closeAudioContext(ctx);
       ctxRef.current = null;
     };
@@ -345,6 +357,16 @@ export function useAudioPlayer(
     }
   }, []);
 
+  const setMasterVolume = useCallback((v: number) => {
+    const clamped = Math.max(0, Math.min(1, v));
+
+    setMasterVolumeState(clamped);
+
+    if (masterGainRef.current) {
+      masterGainRef.current.gain.value = clamped;
+    }
+  }, []);
+
   const cleanup = useCallback(() => {
     cancelledRef.current = true;
 
@@ -366,12 +388,14 @@ export function useAudioPlayer(
       isFinished,
       error,
       guideVolume,
+      masterVolume,
       guideAvailable,
       play,
       pause,
       resume,
       seek,
       setGuideVolume,
+      setMasterVolume,
       cleanup,
       getVocalsBuffer,
       getScoringBuffer,
@@ -386,12 +410,14 @@ export function useAudioPlayer(
       isFinished,
       error,
       guideVolume,
+      masterVolume,
       guideAvailable,
       play,
       pause,
       resume,
       seek,
       setGuideVolume,
+      setMasterVolume,
       cleanup,
       getVocalsBuffer,
       getScoringBuffer,

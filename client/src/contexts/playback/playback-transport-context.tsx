@@ -10,6 +10,7 @@
 
 import { type AudioPlayer, type TimeSubscriber, useAudioPlayer } from "@/hooks/use-audio-player";
 import { ensureMp3Stems, onStemsReady } from "@/bridge/playback";
+import { clampPlaybackTime } from "@/lib/playback/transport-controls";
 import {
   createContext,
   useCallback,
@@ -30,6 +31,7 @@ export interface PlaybackTransportState {
   paused: boolean;
   duration: number;
   guideVolume: number;
+  masterVolume: number;
   guideAvailable: boolean;
   error: string | null;
 }
@@ -39,6 +41,7 @@ export interface PlaybackTransportActions {
   getCurrentTime: () => number;
   seek: (time: number) => void;
   setGuideVolume: (volume: number) => void;
+  setMasterVolume: (volume: number) => void;
   getVocalsBuffer: AudioPlayer["getVocalsBuffer"];
   getScoringBuffer: AudioPlayer["getScoringBuffer"];
   getAudioContext: AudioPlayer["getAudioContext"];
@@ -147,15 +150,16 @@ export function PlaybackTransportProvider({
 
   const seek = useCallback(
     (time: number) => {
+      const targetTime = clampPlaybackTime(time, audio.duration);
       emitTransportEvent({
         type: "seek",
         sourceTime: audio.getCurrentTime(),
-        targetTime: time,
+        targetTime,
         playing: audio.isPlaying,
       });
-      audio.seek(time);
+      audio.seek(targetTime);
     },
-    [audio.getCurrentTime, audio.isPlaying, audio.seek, emitTransportEvent],
+    [audio.duration, audio.getCurrentTime, audio.isPlaying, audio.seek, emitTransportEvent],
   );
 
   const handleExit = useCallback(() => {
@@ -177,6 +181,7 @@ export function PlaybackTransportProvider({
       paused,
       duration: audio.duration,
       guideVolume: audio.guideVolume,
+      masterVolume: audio.masterVolume,
       guideAvailable: audio.guideAvailable,
       error: audio.error,
     }),
@@ -186,6 +191,7 @@ export function PlaybackTransportProvider({
       audio.isFinished,
       audio.duration,
       audio.guideVolume,
+      audio.masterVolume,
       audio.guideAvailable,
       audio.error,
       paused,
@@ -198,6 +204,7 @@ export function PlaybackTransportProvider({
       getCurrentTime: audio.getCurrentTime,
       seek,
       setGuideVolume: audio.setGuideVolume,
+      setMasterVolume: audio.setMasterVolume,
       getVocalsBuffer: audio.getVocalsBuffer,
       getScoringBuffer: audio.getScoringBuffer,
       getAudioContext: audio.getAudioContext,
@@ -213,6 +220,7 @@ export function PlaybackTransportProvider({
       audio.getCurrentTime,
       seek,
       audio.setGuideVolume,
+      audio.setMasterVolume,
       audio.getVocalsBuffer,
       audio.getScoringBuffer,
       audio.getAudioContext,

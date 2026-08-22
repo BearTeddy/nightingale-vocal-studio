@@ -11,6 +11,7 @@ import { ResultDialog } from "@/components/playback/dialogs/result";
 import { LyricsDisplay } from "@/components/playback/lyrics-display";
 import { PauseOverlay } from "@/components/playback/pause-overlay";
 import { PitchGraph } from "@/components/playback/pitch-graph";
+import { PlaybackControls } from "@/components/playback/playback-controls";
 import { PlaybackHud } from "@/components/playback/playback-hud";
 import {
   PlaybackProviders,
@@ -35,7 +36,7 @@ interface PlaybackLayoutProps {
 
 function PlaybackLayout({ song, config }: PlaybackLayoutProps) {
   const { isReady, paused } = usePlaybackTransportState();
-  const { handleContinue, handleExit } = usePlaybackTransportActions();
+  const { handleContinue } = usePlaybackTransportActions();
   const { segments } = usePlaybackTranscriptState();
   const { series } = usePlaybackMicState();
   const lyricsVerticalPosition = config?.lyrics_vertical_position ?? "bottom";
@@ -63,10 +64,11 @@ function PlaybackLayout({ song, config }: PlaybackLayoutProps) {
             verticalPosition={lyricsVerticalPosition}
             horizontalPosition={lyricsHorizontalPosition}
           />
+          <PlaybackControls title={song.title} artist={song.artist} config={config} />
         </>
       )}
 
-      <PauseOverlay open={paused && !result.open} onContinue={handleContinue} onExit={handleExit} />
+      <PauseOverlay open={paused && !result.open} onContinue={handleContinue} />
 
       <ResultDialog
         open={result.open}

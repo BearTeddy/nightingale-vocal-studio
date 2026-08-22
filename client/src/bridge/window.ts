@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "./runtime";
 
 export const triggerFrontendReady = async (): Promise<void> => {
@@ -15,4 +16,9 @@ export const windowImmersive = async (): Promise<boolean> => {
 export const minimizeWindow = async (): Promise<void> => {
   if (!isTauri) return;
   return invoke<void>("minimize_window");
+};
+
+export const startWindowDragging = async (): Promise<void> => {
+  if (!isTauri) return;
+  await getCurrentWindow().startDragging();
 };
