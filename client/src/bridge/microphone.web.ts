@@ -222,5 +222,6 @@ export const webMicrophoneAdapter: MicrophoneAdapter = {
   startCapture,
   stopCapture,
   setMonitorEnabled: setWebMicMonitorEnabled,
+  setMonitorGain: async (gain) => setWebMicMonitorGain(gain),
   onSamples: async (cb) => subscribeMicSamples(cb),
 };

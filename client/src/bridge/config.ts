@@ -18,7 +18,7 @@ export const saveConfig = async (config: AppConfig): Promise<AppConfig> => {
   const saved = await invoke<AppConfig>("save_config", { config });
 
   if (saved.mic_monitor_gain != null) {
-    updateMicMonitorGain(saved.mic_monitor_gain);
+    await updateMicMonitorGain(saved.mic_monitor_gain);
   }
 
   return saved;

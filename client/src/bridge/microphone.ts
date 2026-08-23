@@ -15,6 +15,7 @@ export interface MicrophoneAdapter {
   startCapture(preferred: string | null, options: MicCaptureOptions): Promise<string>;
   stopCapture(): Promise<void>;
   setMonitorEnabled?(enabled: boolean): Promise<void>;
+  setMonitorGain?(gain: number): Promise<void>;
   onSamples(cb: MicSamplesCallback): Promise<StopListening>;
   onPitch?(cb: NativePitchCallback): Promise<StopListening>;
   getCaptureStatus?(): Promise<MicCaptureStatus>;
@@ -86,14 +87,11 @@ export const startMicCapture = (
 
 export const stopMicCapture = (): Promise<void> => microphoneAdapter.stopCapture();
 
-/**
- * Pushes a new monitor gain to the active web capture. In Tauri the same value
- * is applied server-side from `save_config` via `set_monitor_gain`, so this
- * call is a no-op in that build.
- */
-export const updateMicMonitorGain = (value: number): void => {
-  if (isTauri) return;
+/** Changes karaoke voice volume immediately without restarting mic capture. */
+export const updateMicMonitorGain = (value: number): Promise<void> => {
+  if (isTauri) return tauriMicrophoneAdapter.setMonitorGain?.(value) ?? Promise.resolve();
   setWebMicMonitorGain(value);
+  return Promise.resolve();
 };
 
 /** Changes sidetone without restarting capture, so pitch scoring stays live. */

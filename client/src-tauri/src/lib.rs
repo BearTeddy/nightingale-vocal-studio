@@ -164,6 +164,7 @@ pub fn run() {
             get_latest_mic_samples,
             get_vocal_recording_status,
             set_monitor_enabled,
+            set_monitor_gain,
             start_mic_capture,
             stop_mic_capture,
             start_vocal_recording,

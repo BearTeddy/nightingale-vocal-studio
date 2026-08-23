@@ -58,6 +58,7 @@ static RECORDER_WRITE_ERROR: once_cell::sync::Lazy<Mutex<Option<String>>> =
 static RECORDER_OP_LOCK: once_cell::sync::Lazy<Mutex<()>> =
     once_cell::sync::Lazy::new(|| Mutex::new(()));
 
+#[tauri::command]
 pub fn set_monitor_gain(gain: f32) {
     let clamped = gain.clamp(0.0, MAX_MONITOR_GAIN);
     MONITOR_GAIN_BITS.store(clamped.to_bits(), Ordering::Relaxed);

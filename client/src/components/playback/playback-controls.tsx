@@ -2,9 +2,15 @@ import { isFullScreen, setFullScreen } from "@/bridge/fullScreen";
 import { isTauri } from "@/bridge/runtime";
 import { startWindowDragging } from "@/bridge/window";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { usePlaybackTransportActions, usePlaybackTransportState } from "@/contexts/playback";
+import {
+  usePlaybackMicActions,
+  usePlaybackMicState,
+  usePlaybackTransportActions,
+  usePlaybackTransportState,
+} from "@/contexts/playback";
 import { usePlaybackConfigPersist } from "@/hooks/playback/use-playback-config-persist";
 import {
   PLAYBACK_CONTROLS_TOGGLE_EVENT,
@@ -17,6 +23,7 @@ import type { AppConfig } from "@/types/AppConfig";
 import {
   EyeOff,
   GripHorizontal,
+  Headphones,
   ListRestart,
   LogOut,
   Maximize2,
@@ -101,12 +108,15 @@ export function PlaybackControls({ title, artist, config }: PlaybackControlsProp
     handleContinue,
     handleExit,
   } = usePlaybackTransportActions();
+  const { micMonitorUserEnabled, micMonitorGain } = usePlaybackMicState();
+  const { handleToggleMicMonitor, setMicMonitorGain } = usePlaybackMicActions();
   const persistConfig = usePlaybackConfigPersist(config);
 
   const [currentTime, setCurrentTime] = useState(() => getCurrentTime());
   const [scrubTime, setScrubTime] = useState<number | null>(null);
   const [visible, setVisible] = useState(true);
   const [fullscreen, setFullscreenState] = useState(false);
+  const [voiceVolumeOpen, setVoiceVolumeOpen] = useState(false);
   const hideTimerRef = useRef<number | null>(null);
   const lastPointerActivityRef = useRef(0);
   const scrubTimeRef = useRef<number | null>(null);
@@ -121,13 +131,13 @@ export function PlaybackControls({ title, artist, config }: PlaybackControlsProp
 
   const scheduleHide = useCallback(() => {
     clearHideTimer();
-    if (paused || !isPlaying) return;
+    if (paused || !isPlaying || voiceVolumeOpen) return;
 
     hideTimerRef.current = window.setTimeout(() => {
       setVisible(false);
       hideTimerRef.current = null;
     }, AUTO_HIDE_DELAY_MS);
-  }, [clearHideTimer, isPlaying, paused]);
+  }, [clearHideTimer, isPlaying, paused, voiceVolumeOpen]);
 
   const revealControls = useCallback(() => {
     setVisible(true);
@@ -244,6 +254,29 @@ export function PlaybackControls({ title, artist, config }: PlaybackControlsProp
       setMasterVolume(next);
     },
     [setMasterVolume],
+  );
+
+  const updateKaraokeVoiceVolume = useCallback(
+    (values: number[]) => {
+      setMicMonitorGain((values[0] ?? 0) / 100);
+    },
+    [setMicMonitorGain],
+  );
+
+  const persistKaraokeVoiceVolume = useCallback(
+    (values: number[]) => {
+      const next = (values[0] ?? 0) / 100;
+      setMicMonitorGain(next);
+      persistConfig({ mic_monitor_gain: next });
+    },
+    [persistConfig, setMicMonitorGain],
+  );
+
+  const chooseKaraokeVoiceVolume = useCallback(
+    (percent: number) => {
+      persistKaraokeVoiceVolume([percent]);
+    },
+    [persistKaraokeVoiceVolume],
   );
 
   const toggleGuide = useCallback(() => {
@@ -371,6 +404,93 @@ export function PlaybackControls({ title, artist, config }: PlaybackControlsProp
             >
               <MicVocal className={cn(guideVolume <= 0 && "opacity-45")} />
             </ControlButton>
+
+            <Popover
+              open={voiceVolumeOpen}
+              onOpenChange={(open) => {
+                setVoiceVolumeOpen(open);
+                if (open) clearHideTimer();
+                else window.setTimeout(scheduleHide, 0);
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={cn(
+                    CONTROL_BUTTON_CLASS,
+                    "h-9 w-auto gap-1.5 px-2 tabular-nums",
+                    micMonitorUserEnabled &&
+                      "border-cyan-300/60 bg-cyan-400/20 text-cyan-100 hover:bg-cyan-400/30",
+                  )}
+                  aria-label={`Karaoke voice volume ${Math.round(micMonitorGain * 100)}%`}
+                  title="Karaoke voice volume"
+                >
+                  <Headphones className="size-4" />
+                  <span className="hidden text-[0.65rem] sm:inline">
+                    Voice {Math.round(micMonitorGain * 100)}%
+                  </span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                side="top"
+                align="end"
+                sideOffset={8}
+                className="w-64 border border-white/15 bg-black/95 text-white ring-white/10"
+                onPointerEnter={clearHideTimer}
+                onPointerLeave={scheduleHide}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">Karaoke voice</p>
+                    <p className="text-[0.65rem] text-white/55">Your live microphone return</p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={micMonitorUserEnabled ? "default" : "outline"}
+                    onClick={handleToggleMicMonitor}
+                  >
+                    {micMonitorUserEnabled ? "On" : "Off"}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Slider
+                    className="h-7 flex-1 [&_[data-slot=slider-thumb]]:size-4 [&_[data-slot=slider-track]]:h-2"
+                    aria-label="Karaoke voice volume"
+                    data-nav-passthrough
+                    min={0}
+                    max={200}
+                    step={1}
+                    value={[micMonitorGain * 100]}
+                    onValueChange={updateKaraokeVoiceVolume}
+                    onValueCommit={persistKaraokeVoiceVolume}
+                  />
+                  <span className="w-10 text-right text-xs font-semibold tabular-nums">
+                    {Math.round(micMonitorGain * 100)}%
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1">
+                  {[50, 100, 150, 200].map((percent) => (
+                    <button
+                      type="button"
+                      key={percent}
+                      className={cn(
+                        "rounded border border-white/15 px-1.5 py-1 text-[0.65rem] transition-colors hover:bg-white/15",
+                        Math.round(micMonitorGain * 100) === percent &&
+                          "border-cyan-300/70 bg-cyan-400/20 text-cyan-100",
+                      )}
+                      onClick={() => chooseKaraokeVoiceVolume(percent)}
+                    >
+                      {percent}%
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[0.65rem] text-white/45">
+                  Live during playback. Wired headphones prevent feedback.
+                </p>
+              </PopoverContent>
+            </Popover>
 
             <ControlButton
               label={masterVolume > 0 ? "Mute music" : "Unmute music"}

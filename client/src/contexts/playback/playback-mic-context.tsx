@@ -22,7 +22,7 @@ import { transformMelodyMap } from "@/lib/pitch/melody";
 import { planRecordingAttachment } from "@/lib/recording-sync";
 import { shouldAutoExportRecording } from "@/lib/recording-recovery";
 import { loadMelodyMap } from "@/bridge/playback";
-import { updateMicMonitorEnabled } from "@/bridge/microphone";
+import { updateMicMonitorEnabled, updateMicMonitorGain } from "@/bridge/microphone";
 import {
   exportRecording,
   getVocalRecordingStatus,
@@ -60,6 +60,7 @@ import type { TransportEvent } from "./playback-transport-context";
 export interface PlaybackMicState {
   micUserEnabled: boolean;
   micMonitorUserEnabled: boolean;
+  micMonitorGain: number;
   selectedMicId: string | null;
   micName: string;
   pitchScore: number | null;
@@ -96,6 +97,7 @@ export interface PlaybackMicActions {
   handleToggleMic: () => void;
   handleCycleMic: () => void;
   handleToggleMicMonitor: () => void;
+  setMicMonitorGain: (gain: number) => void;
   handleToggleRecording: () => void;
   setVocalGain: (gain: number) => void;
   renderRecordingMix: () => void;
@@ -139,6 +141,7 @@ export function PlaybackMicProvider({
   const [micMonitorUserEnabled, setMicMonitorUserEnabled] = useState(
     config?.mic_monitoring ?? false,
   );
+  const [micMonitorGain, setMicMonitorGainState] = useState(config?.mic_monitor_gain ?? 0.65);
   const [selectedMicId, setSelectedMicId] = useState<string | null>(config?.preferred_mic ?? null);
   const [melody, setMelody] = useState<MelodyMap | null>(null);
   const { data: profiles } = useProfiles();
@@ -621,6 +624,15 @@ export function PlaybackMicProvider({
     });
   }, [persistConfig, micUserEnabled]);
 
+  const changeMicMonitorGain = useCallback((gain: number) => {
+    const next = Math.max(0, Math.min(2, gain));
+    setMicMonitorGainState(next);
+    void updateMicMonitorGain(next).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`Karaoke voice volume: ${message}`);
+    });
+  }, []);
+
   const changeScoringDifficulty = useCallback(
     (difficulty: ScoringDifficulty) => {
       if (selectedScoringDifficulty === difficulty) return;
@@ -750,6 +762,7 @@ export function PlaybackMicProvider({
     return {
       micUserEnabled,
       micMonitorUserEnabled,
+      micMonitorGain,
       selectedMicId,
       micName: selectedMicId ?? "Default",
       pitchScore: micReady && strictScoringAvailable ? score : null,
@@ -775,6 +788,7 @@ export function PlaybackMicProvider({
   }, [
     micUserEnabled,
     micMonitorUserEnabled,
+    micMonitorGain,
     selectedMicId,
     score,
     series,
@@ -801,6 +815,7 @@ export function PlaybackMicProvider({
       handleToggleMic,
       handleCycleMic,
       handleToggleMicMonitor,
+      setMicMonitorGain: changeMicMonitorGain,
       handleToggleRecording,
       setVocalGain,
       renderRecordingMix,
@@ -814,6 +829,7 @@ export function PlaybackMicProvider({
       handleToggleMic,
       handleCycleMic,
       handleToggleMicMonitor,
+      changeMicMonitorGain,
       handleToggleRecording,
       setVocalGain,
       renderRecordingMix,
