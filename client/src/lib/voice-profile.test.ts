@@ -32,6 +32,9 @@ function profile(checkedAt = 100): VoiceProfile {
     microphoneScore: 80,
     noiseFloorDb: -52,
     clippingPercent: 0,
+    rangeClippingPercent: 0,
+    rangeVoicedPercent: 92,
+    rangeCalibrationValid: true,
     pitchMatchScore: 74,
     intervalMatchScore: 70,
     stabilityScore: 68,
@@ -40,6 +43,9 @@ function profile(checkedAt = 100): VoiceProfile {
     recommendations: ["Practice one note."],
     checkedAt,
     assessmentComplete: true,
+    rangeComfortConfirmed: true,
+    rangeComfortRating: 5,
+    rangeEffortRating: 1,
   };
 }
 

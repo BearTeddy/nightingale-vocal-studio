@@ -163,6 +163,8 @@ export function PlaybackMicProvider({
   });
   const recordingStartedRef = useRef(false);
   const recordingStartTimeRef = useRef(Math.floor(Date.now() / 1000));
+  const practiceStartTimeRef = useRef(Math.floor(Date.now() / 1000));
+  const practiceSessionSavedRef = useRef(false);
   const recordingTakeRef = useRef<RecordingTake | null>(null);
   const recordingStatusRef = useRef<PlaybackMicState["recordingStatus"]>("off");
   const vocalGainRef = useRef(1);
@@ -182,6 +184,7 @@ export function PlaybackMicProvider({
     similarities: [],
     timestamps: [],
   }));
+  const feedbackModeRef = useRef(feedbackMode);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,10 +211,12 @@ export function PlaybackMicProvider({
 
   const captureOptions = useMemo(
     () => ({
-      emit_audio: micMonitorEnabled,
+      // Monitoring is toggled through the live command below. Starting with it
+      // off avoids ever restarting the shared pitch/recording capture stream.
+      emit_audio: false,
       monitor_mode: config?.mic_monitor_mode ?? "low_latency",
     }),
-    [config?.mic_monitor_mode, micMonitorEnabled],
+    [config?.mic_monitor_mode],
   );
 
   const {
@@ -227,12 +232,13 @@ export function PlaybackMicProvider({
   const reactiveRef = useMicReactive(micPitchEnabled);
 
   useEffect(() => {
-    void updateMicMonitorEnabled(micMonitorEnabled).catch((error) => {
-      if (!micMonitorEnabled) return;
+    const enabled = micCaptureActive && micMonitorEnabled;
+    void updateMicMonitorEnabled(enabled).catch((error) => {
+      if (!enabled) return;
       const message = error instanceof Error ? error.message : String(error);
       toast.error(`Mic monitor: ${message}`);
     });
-  }, [micMonitorEnabled]);
+  }, [micCaptureActive, micMonitorEnabled]);
 
   const { series, score, performance, getPerformanceSeries } = usePitchScoring(
     { isReady, duration, getReferenceBuffer: getVocalsBuffer, subscribe },
@@ -244,6 +250,7 @@ export function PlaybackMicProvider({
   performanceRef.current = performance;
   getPerformanceSeriesRef.current = getPerformanceSeries;
   vocalGainRef.current = vocalGain;
+  feedbackModeRef.current = feedbackMode;
 
   const updateRecordingStatus = useCallback((status: PlaybackMicState["recordingStatus"]) => {
     recordingStatusRef.current = status;
@@ -318,6 +325,7 @@ export function PlaybackMicProvider({
         const completedSeries = getPerformanceSeriesRef.current();
         if (mountedRef.current) setPerformanceSeries(completedSeries);
         try {
+          practiceSessionSavedRef.current = true;
           await savePracticeSession({
             id: take.session_id,
             profile: take.profile,
@@ -328,6 +336,7 @@ export function PlaybackMicProvider({
             performance_json: JSON.stringify({
               ...scorePayload,
               completion,
+              feedback_mode: feedbackModeRef.current,
               mic_latency_compensation_sec:
                 config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
               pitch_series: completedSeries,
@@ -336,6 +345,7 @@ export function PlaybackMicProvider({
             transport_segments: segments,
           });
         } catch (error) {
+          practiceSessionSavedRef.current = false;
           const message = error instanceof Error ? error.message : String(error);
           if (mountedRef.current) toast.error(`Session history: ${message}`);
         }
@@ -390,10 +400,53 @@ export function PlaybackMicProvider({
   );
   finalizeRecordingRef.current = finalizeRecordingNow;
 
+  const saveUnrecordedPracticeSession = useCallback(
+    async (completion: "completed" | "interrupted") => {
+      if (practiceSessionSavedRef.current) return;
+      const scorePayload = performanceRef.current;
+      if (!scorePayload || scorePayload.phrases.length === 0) return;
+      practiceSessionSavedRef.current = true;
+      const endedAt = Math.floor(Date.now() / 1000);
+      try {
+        await savePracticeSession({
+          id: `karaoke-${fileHash}-${Date.now()}`,
+          profile: profiles?.active ?? "Guest",
+          song_hash: fileHash,
+          kind: "karaoke",
+          started_at: practiceStartTimeRef.current,
+          ended_at: endedAt,
+          performance_json: JSON.stringify({
+            ...scorePayload,
+            completion,
+            feedback_mode: feedbackModeRef.current,
+            mic_latency_compensation_sec:
+              config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+            pitch_series: getPerformanceSeriesRef.current(),
+          }),
+          recording_take_id: null,
+          transport_segments: [],
+        });
+      } catch (error) {
+        practiceSessionSavedRef.current = false;
+        if (mountedRef.current) {
+          toast.error(`Session history: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    },
+    [config?.mic_latency_compensation_sec, fileHash, profiles?.active],
+  );
+
   const handleTransportEvent = useCallback(
     async (event: TransportEvent) => {
-      if (!recordingStartedRef.current) return;
       const terminal = event.type === "finish" || event.type === "exit";
+      if (!recordingStartedRef.current) {
+        if (terminal) {
+          await saveUnrecordedPracticeSession(
+            event.type === "finish" ? "completed" : "interrupted",
+          );
+        }
+        return;
+      }
       if (!terminal && finalizingRef.current) return;
       if (event.type === "pause") {
         await pauseVocalRecording();
@@ -427,7 +480,13 @@ export function PlaybackMicProvider({
         event.type === "finish" ? "completed" : "interrupted",
       );
     },
-    [closeOpenSegment, finalizeRecordingNow, recordedPosition, updateRecordingStatus],
+    [
+      closeOpenSegment,
+      finalizeRecordingNow,
+      recordedPosition,
+      saveUnrecordedPracticeSession,
+      updateRecordingStatus,
+    ],
   );
 
   useEffect(
@@ -636,13 +695,15 @@ export function PlaybackMicProvider({
   const changeScoringDifficulty = useCallback(
     (difficulty: ScoringDifficulty) => {
       if (selectedScoringDifficulty === difficulty) return;
+      if (!isFinished && getCurrentTime() > 0.25) {
+        toast.info("Scoring strictness is locked for this performance. Restart to change it.");
+        return;
+      }
       setSelectedScoringDifficulty(difficulty);
       persistConfig({ scoring_difficulty: difficulty });
-      toast.success(
-        `${scoringDifficultyProfile(difficulty).label} scoring selected — score and combo restarted`,
-      );
+      toast.success(`${scoringDifficultyProfile(difficulty).label} scoring selected`);
     },
-    [persistConfig, selectedScoringDifficulty],
+    [getCurrentTime, isFinished, persistConfig, selectedScoringDifficulty],
   );
 
   const handleToggleRecording = useCallback(() => {

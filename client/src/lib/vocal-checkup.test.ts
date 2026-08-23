@@ -3,6 +3,7 @@ import type { PitchFrame } from "@/types/PitchFrame";
 import {
   adaptiveCheckupBaseMidi,
   analyzeVocalCheckup,
+  canConfirmComfortableRange,
   canCompleteVocalCheckup,
   checkupSessionDuration,
   checkupStageAt,
@@ -39,7 +40,7 @@ describe("vocal checkup", () => {
     expect(canCompleteVocalCheckup(Number.NaN)).toBe(false);
   });
 
-  it("reports a transparent composite across all measured checkup skills", () => {
+  it("keeps microphone quality separate from the singing composite", () => {
     expect(
       vocalCheckupScore({
         microphoneScore: 90,
@@ -49,7 +50,7 @@ describe("vocal checkup", () => {
         sustainScore: 50,
         rhythmScore: 40,
       }),
-    ).toBe(65);
+    ).toBe(60);
   });
 
   it("defines every guided stage and pitch target", () => {
@@ -95,6 +96,9 @@ describe("vocal checkup", () => {
     }
     const result = analyzeVocalCheckup(samples, 60, 123);
     expect(result).not.toBeNull();
+    expect(result?.rangeCalibrationValid).toBe(true);
+    expect(canConfirmComfortableRange(result!, 4, 2)).toBe(true);
+    expect(canConfirmComfortableRange(result!, 3, 2)).toBe(false);
     expect(result?.microphoneScore).toBeGreaterThan(80);
     expect(result?.pitchMatchScore).toBe(100);
     expect(result?.stabilityScore).toBe(100);
@@ -158,5 +162,34 @@ describe("vocal checkup", () => {
     const result = analyzeVocalCheckup(samples, 60, 123);
     expect(result).not.toBeNull();
     expect(result?.stabilityScore).toBeGreaterThan(90);
+  });
+
+  it("excludes clipped high-note artifacts from range and singing evidence", () => {
+    const samples: CheckupFrame[] = [];
+    for (let time = 0; time < 30; time += 0.05) {
+      let midi: number | null = null;
+      let rms = 0.002;
+      if (time >= 3 && time < 11) {
+        midi = 55 + ((time - 3) / 8) * 10;
+        rms = 0.08;
+      } else if (time >= 17.85 && time < 23) {
+        midi = 60;
+        rms = 0.08;
+      }
+      const nextFrame = frame(midi, rms);
+      if (time >= 3 && time < 11 && Math.floor(time * 20) % 3 === 0) {
+        nextFrame.midi = 96;
+        nextFrame.hz = 2_093;
+        nextFrame.peak = 1;
+      }
+      samples.push({ elapsed_sec: time, frame: nextFrame });
+    }
+
+    const result = analyzeVocalCheckup(samples, 60, 123);
+    expect(result).not.toBeNull();
+    expect(result?.highMidi).toBeLessThan(70);
+    expect(result?.clippingPercent).toBeGreaterThan(0);
+    expect(result?.rangeCalibrationValid).toBe(false);
+    expect(canConfirmComfortableRange(result!, 5, 1)).toBe(false);
   });
 });

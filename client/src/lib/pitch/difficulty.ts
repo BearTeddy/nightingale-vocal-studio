@@ -14,8 +14,9 @@ export interface ScoringDifficultyProfile {
 export const SCORING_DIFFICULTY_PROFILES: Record<ScoringDifficulty, ScoringDifficultyProfile> = {
   easy: {
     id: "easy",
-    label: "Easy",
-    description: "Learn the melody with a forgiving half-semitone center.",
+    label: "Forgiving",
+    description:
+      "A wide scoring window for learning the melody. This is score strictness, not singer level.",
     fullCreditCents: 50,
     zeroCreditCents: 150,
     noteHitThreshold: 0.55,
@@ -24,8 +25,8 @@ export const SCORING_DIFFICULTY_PROFILES: Record<ScoringDifficulty, ScoringDiffi
   },
   medium: {
     id: "medium",
-    label: "Medium",
-    description: "Balanced pitch and timing for regular practice.",
+    label: "Balanced",
+    description: "Balanced pitch and timing precision for regular practice.",
     fullCreditCents: 25,
     zeroCreditCents: 100,
     noteHitThreshold: 0.75,
@@ -34,8 +35,8 @@ export const SCORING_DIFFICULTY_PROFILES: Record<ScoringDifficulty, ScoringDiffi
   },
   pro: {
     id: "pro",
-    label: "Pro",
-    description: "Tight tuning and timing for performance-level control.",
+    label: "Precision",
+    description: "A tight scoring window for detailed performance work.",
     fullCreditCents: 12,
     zeroCreditCents: 60,
     noteHitThreshold: 0.85,

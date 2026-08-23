@@ -494,14 +494,14 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
             </button>
             <button
               type="button"
-              title="Game feedback"
+              title="Perform without coaching interruptions; game effects stay on"
               aria-pressed={feedbackMode === "game"}
               onClick={() => setFeedbackMode("game")}
               className={`flex h-8 items-center gap-1 px-2 text-xs transition-colors ${
                 feedbackMode === "game" ? "bg-white text-black" : "text-white/75 hover:bg-white/10"
               }`}
             >
-              <Gamepad2 className="size-4" /> Game
+              <Gamepad2 className="size-4" /> Perform
             </button>
             <button
               type="button"

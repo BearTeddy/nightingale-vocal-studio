@@ -1,7 +1,12 @@
 import type { VocalCheckupResult } from "@/lib/vocal-checkup";
 import type { PracticeSession } from "@/types/PracticeSession";
 
-export type VoiceProfile = VocalCheckupResult & { assessmentComplete: boolean };
+export type VoiceProfile = VocalCheckupResult & {
+  assessmentComplete: boolean;
+  rangeComfortConfirmed?: boolean;
+  rangeComfortRating?: number | null;
+  rangeEffortRating?: number | null;
+};
 
 interface ProfileStorage {
   getItem(key: string): string | null;
@@ -55,6 +60,8 @@ export function parseVoiceProfile(payload: unknown, fallbackCheckedAt = 0): Voic
   const assessmentComplete = CHECKUP_SCORE_KEYS.every(
     (key) => typeof value[key] === "number" && Number.isFinite(value[key]),
   );
+  const microphoneScore = finiteNumber(value.microphoneScore, 0);
+  const clippingPercent = finiteNumber(value.clippingPercent, 0);
   const recommendations = Array.isArray(value.recommendations)
     ? value.recommendations.filter(
         (recommendation): recommendation is string =>
@@ -67,9 +74,12 @@ export function parseVoiceProfile(payload: unknown, fallbackCheckedAt = 0): Voic
     highMidi,
     tessituraLowMidi,
     tessituraHighMidi,
-    microphoneScore: finiteNumber(value.microphoneScore, 0),
+    microphoneScore,
     noiseFloorDb: finiteNumber(value.noiseFloorDb, 0),
-    clippingPercent: finiteNumber(value.clippingPercent, 0),
+    clippingPercent,
+    rangeClippingPercent: finiteNumber(value.rangeClippingPercent, clippingPercent),
+    rangeVoicedPercent: finiteNumber(value.rangeVoicedPercent, 0),
+    rangeCalibrationValid: value.rangeCalibrationValid === true,
     pitchMatchScore: finiteNumber(value.pitchMatchScore, 0),
     intervalMatchScore: finiteNumber(value.intervalMatchScore, 0),
     stabilityScore: finiteNumber(value.stabilityScore, 0),
@@ -78,6 +88,15 @@ export function parseVoiceProfile(payload: unknown, fallbackCheckedAt = 0): Voic
     recommendations,
     checkedAt: finiteNumber(value.checkedAt, fallbackCheckedAt),
     assessmentComplete,
+    rangeComfortConfirmed: value.rangeComfortConfirmed === true,
+    rangeComfortRating:
+      typeof value.rangeComfortRating === "number" && Number.isFinite(value.rangeComfortRating)
+        ? clamp(value.rangeComfortRating, 1, 5)
+        : null,
+    rangeEffortRating:
+      typeof value.rangeEffortRating === "number" && Number.isFinite(value.rangeEffortRating)
+        ? clamp(value.rangeEffortRating, 1, 5)
+        : null,
   };
 }
 

@@ -23,6 +23,7 @@ use crate::cache::nightingale_dir;
 
 mod analysis_queue;
 mod connection;
+mod learning;
 mod migrations;
 mod playlists;
 mod practice;
@@ -34,6 +35,10 @@ mod songs;
 pub use analysis_queue::{
     analysis_queue_clear, analysis_queue_delete, analysis_queue_load_rows,
     analysis_queue_save_rows, analysis_queue_upsert_row,
+};
+pub use learning::{
+    delete_learning_state, list_learning_attempts, load_learning_state, save_learner_profile,
+    save_learning_attempt,
 };
 pub use migrations::rewrite_legacy_jellyfin_paths;
 pub use playlists::{PlaylistDefinition, PlaylistSongKeyKind, replace_all_playlists};

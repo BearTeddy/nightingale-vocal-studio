@@ -74,7 +74,7 @@ export function VoiceRangeScale({
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
           <h3 id="voice-range-scale-title" className="text-sm font-semibold">
-            Full vocal range scale
+            Vocal range map
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
             Approximate ensemble references. Range alone does not assign a voice type.
@@ -83,7 +83,7 @@ export function VoiceRangeScale({
         {hasMeasuredRange && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-4 bg-emerald-500" /> Comfortable range
+              <span className="h-2 w-4 bg-emerald-500" /> Explored range
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-4 bg-cyan-500" /> Tessitura
@@ -114,7 +114,7 @@ export function VoiceRangeScale({
         {hasMeasuredRange && (
           <div className="mt-1 border-y border-border py-1">
             <RangeTrack
-              label="Your range"
+              label="Explored range"
               lowMidi={lowMidi}
               highMidi={highMidi}
               midiName={midiName}

@@ -34,7 +34,7 @@ describe("VoiceRangeScale", () => {
     expect(markup).not.toContain("Your range");
   });
 
-  it("adds the measured comfortable range and tessitura when available", () => {
+  it("adds the measured explored range and tessitura when available", () => {
     const markup = renderToStaticMarkup(
       <VoiceRangeScale
         lowMidi={48}
@@ -45,7 +45,7 @@ describe("VoiceRangeScale", () => {
       />,
     );
 
-    expect(markup).toContain("Your range");
+    expect(markup).toContain("Explored range");
     expect(markup).toContain("M48-M72");
     expect(markup).toContain("Your tessitura");
     expect(markup).toContain("M52-M68");

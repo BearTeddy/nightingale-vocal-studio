@@ -22,6 +22,9 @@ export interface VocalCheckupResult {
   microphoneScore: number;
   noiseFloorDb: number;
   clippingPercent: number;
+  rangeClippingPercent: number;
+  rangeVoicedPercent: number;
+  rangeCalibrationValid: boolean;
   pitchMatchScore: number;
   intervalMatchScore: number;
   stabilityScore: number;
@@ -59,13 +62,22 @@ export function canCompleteVocalCheckup(elapsedSeconds: number): boolean {
 export function vocalCheckupScore(result: VocalCheckupScores): number {
   return clampScore(
     average([
-      result.microphoneScore,
       result.pitchMatchScore,
       result.intervalMatchScore,
       result.stabilityScore,
       result.sustainScore,
       result.rhythmScore,
     ]),
+  );
+}
+
+export function canConfirmComfortableRange(
+  result: VocalCheckupResult,
+  comfort: number | null,
+  effort: number | null,
+): boolean {
+  return (
+    result.rangeCalibrationValid && comfort != null && comfort >= 4 && effort != null && effort <= 2
   );
 }
 
@@ -170,13 +182,26 @@ export function analyzeVocalCheckup(
   baseMidi: number,
   checkedAt = Date.now(),
 ): VocalCheckupResult | null {
+  const rangeWindow = samples.filter(({ elapsed_sec }) => elapsed_sec >= 3 && elapsed_sec < 11);
   const voiced = samples.filter(
-    ({ frame }) => frame.voiced && frame.midi != null && frame.clarity >= 0.35,
+    ({ frame }) =>
+      frame.voiced &&
+      frame.midi != null &&
+      frame.clarity >= 0.35 &&
+      (frame.peak ?? frame.rms) < 0.98,
   );
   const rangeMidi = voiced
     .filter(({ elapsed_sec }) => elapsed_sec >= 3 && elapsed_sec < 11)
     .map(({ frame }) => frame.midi as number);
   if (rangeMidi.length < 15) return null;
+
+  const rangeClippingPercent =
+    rangeWindow.length === 0
+      ? 100
+      : (rangeWindow.filter(({ frame }) => (frame.peak ?? frame.rms) >= 0.98).length /
+          rangeWindow.length) *
+        100;
+  const rangeVoicedPercent = (rangeMidi.length / Math.max(1, rangeWindow.length)) * 100;
 
   const quietFrames = samples
     .filter(({ elapsed_sec }) => elapsed_sec < 3)
@@ -189,6 +214,8 @@ export function analyzeVocalCheckup(
       : (samples.filter(({ frame }) => (frame.peak ?? frame.rms) >= 0.98).length / samples.length) *
         100;
   const microphoneScore = clampScore(((-noiseFloorDb - 25) / 35) * 100 - clippingPercent * 4);
+  const rangeCalibrationValid =
+    rangeClippingPercent <= 5 && rangeVoicedPercent >= 35 && microphoneScore >= 40;
 
   const matchSamples = voiced.filter(({ elapsed_sec }) => isEchoResponse(elapsed_sec));
   const matchScores = matchSamples.map(({ elapsed_sec, frame }) => {
@@ -211,7 +238,11 @@ export function analyzeVocalCheckup(
     ({ elapsed_sec }) => elapsed_sec >= SUSTAIN_RESPONSE_START_SECONDS && elapsed_sec < 23,
   );
   const sustainVoiced = sustainWindow.filter(
-    ({ frame }) => frame.voiced && frame.midi != null && frame.clarity >= 0.35,
+    ({ frame }) =>
+      frame.voiced &&
+      frame.midi != null &&
+      frame.clarity >= 0.35 &&
+      (frame.peak ?? frame.rms) < 0.98,
   );
   const sustainScore = clampScore((sustainVoiced.length / Math.max(1, sustainWindow.length)) * 100);
   const sustainCents = sustainVoiced.map(({ frame }) => ((frame.midi as number) - baseMidi) * 100);
@@ -229,7 +260,10 @@ export function analyzeVocalCheckup(
   const onsets: number[] = [];
   let previouslyVoiced = false;
   for (const sample of rhythmWindow) {
-    const isVoiced = sample.frame.voiced && sample.frame.clarity >= 0.35;
+    const isVoiced =
+      sample.frame.voiced &&
+      sample.frame.clarity >= 0.35 &&
+      (sample.frame.peak ?? sample.frame.rms) < 0.98;
     if (isVoiced && !previouslyVoiced) onsets.push(sample.elapsed_sec);
     previouslyVoiced = isVoiced;
   }
@@ -270,6 +304,9 @@ export function analyzeVocalCheckup(
     microphoneScore,
     noiseFloorDb,
     clippingPercent: Math.round(clippingPercent),
+    rangeClippingPercent: Math.round(rangeClippingPercent),
+    rangeVoicedPercent: Math.round(rangeVoicedPercent),
+    rangeCalibrationValid,
     pitchMatchScore,
     intervalMatchScore,
     stabilityScore,

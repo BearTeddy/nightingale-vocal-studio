@@ -1,4 +1,4 @@
-export type StudioTab = "checkup" | "exercises" | "songs" | "history";
+export type StudioTab = "learn" | "checkup" | "exercises" | "songs" | "history";
 
 export type StudioNavigationDirection = "up" | "down" | "left" | "right";
 

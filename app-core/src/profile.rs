@@ -111,6 +111,10 @@ impl ProfileStore {
 
         self.scores.retain(|r| r.profile != name);
 
+        if let Err(error) = crate::delete_learning_state(name) {
+            tracing::warn!("Failed to delete learning state for profile {name}: {error}");
+        }
+
         if self.active.as_deref() == Some(name) {
             self.active = self.profiles.first().cloned();
         }

@@ -31,7 +31,9 @@ use playback::{
     load_melody_map, load_transcript, rebuild_melody_map, save_melody_map, verify_melody_map,
 };
 use practice::{
-    export_recording, list_practice_sessions, load_recording_take, save_practice_session,
+    delete_learning_state, export_recording, list_learning_attempts, list_practice_sessions,
+    load_learning_state, load_recording_take, save_learner_profile, save_learning_attempt,
+    save_practice_session,
 };
 use profile::{add_score, create_profile, delete_profile, load_profiles, switch_profile};
 use scanner::{
@@ -175,6 +177,11 @@ pub fn run() {
             save_practice_session,
             list_practice_sessions,
             load_recording_take,
+            load_learning_state,
+            save_learning_attempt,
+            save_learner_profile,
+            list_learning_attempts,
+            delete_learning_state,
             // Vendor
             is_ready,
             trigger_setup

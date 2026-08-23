@@ -2,6 +2,9 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { RecordingPreview } from "@/components/studio/recording-preview";
+import { LearningHome } from "@/components/studio/learning-home";
+import { TechniqueLab } from "@/components/studio/technique-lab";
+import { UpperRangeLadder } from "@/components/studio/upper-range-ladder";
 import { VoiceRangeScale } from "@/components/studio/voice-range-scale";
 import {
   Select,
@@ -20,6 +23,7 @@ import {
   stopVocalRecording,
 } from "@/bridge/recording";
 import { ensurePlayableSourceVideo } from "@/bridge/playback";
+import { loadLearningState, saveLearnerProfile, saveLearningAttempt } from "@/bridge/learning";
 import { openMediaPath, revealItemInDir } from "@/bridge/opener";
 import { useMicCapture, useMicPitch } from "@/hooks/use-mic-pitch";
 import { useStudioNavigation } from "@/hooks/navigation/use-studio-navigation";
@@ -39,6 +43,18 @@ import { buildListeningSession } from "@/lib/listening-session";
 import { recordingsDirectoryFromDataPath } from "@/lib/recording-path";
 import { canRecoverRecordingMix, recordingTakeNotice } from "@/lib/recording-recovery";
 import { diagnoseMicInput } from "@/lib/mic/input-diagnostic";
+import {
+  STARTER_LESSONS,
+  aggregateTechniquePreferences,
+  buildExerciseLearningAttemptRequest,
+  learningStateToSkillProgress,
+  type AssistPreset,
+  type AttemptKind,
+  type MasteryState,
+  type SkillProgress,
+} from "@/lib/learning";
+import { buildLearningProgressFromHistory } from "@/lib/learning/history-progress";
+import type { TechniqueReflection } from "@/lib/learning/technique-coaching";
 import { DEFAULT_MIC_LATENCY_COMPENSATION_SEC } from "@/lib/pitch/constants";
 import { freqToSemitone, VisualPitchTracker } from "@/lib/pitch/state";
 import { createVocalFeedback } from "@/lib/vocal-feedback";
@@ -55,16 +71,20 @@ import {
   adaptExercisePace,
   adaptExerciseToRange,
   analyzeExercise,
+  createRhythmOnsetExercise,
   exerciseScoringTargetAt,
   exerciseStepAt,
   exerciseTotalSeconds,
+  rhythmTargetEventAt,
   type ExerciseFrame,
   type ExercisePhase,
   type ExerciseResult,
+  type RhythmTargetEvent,
 } from "@/lib/vocal-exercise";
 import {
   adaptiveCheckupBaseMidi,
   analyzeVocalCheckup,
+  canConfirmComfortableRange,
   canCompleteVocalCheckup,
   CHECKUP_DURATION_SECONDS,
   checkupSessionDuration,
@@ -78,6 +98,8 @@ import { useMicDevices } from "@/queries/use-mic-devices";
 import { useProfiles } from "@/queries/use-profiles";
 import type { PracticeSession, SavePracticeSession } from "@/types/PracticeSession";
 import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
+import type { LearnerProfile } from "@/types/LearnerProfile";
+import type { LearningState } from "@/types/LearningState";
 import type { PitchFrame } from "@/types/PitchFrame";
 import type { RecordingTake } from "@/types/RecordingTake";
 import {
@@ -94,6 +116,7 @@ import {
   FolderOpen,
   Play,
   RefreshCw,
+  Route,
   Square,
   Video,
   Volume2,
@@ -105,6 +128,138 @@ import { toast } from "sonner";
 
 const SYSTEM_DEFAULT_MIC = "__system_default__";
 
+const MASTERY_RANK: Record<MasteryState, number> = {
+  new: 0,
+  practicing: 1,
+  assisted: 2,
+  independent: 3,
+  transferred: 4,
+};
+
+function mergeLearningProgress(
+  historyProgress: readonly SkillProgress[],
+  persistedProgress: readonly SkillProgress[],
+): SkillProgress[] {
+  const persistedBySkill = new Map(persistedProgress.map((item) => [item.skillId, item]));
+  return historyProgress.map((historyItem) => {
+    const persisted = persistedBySkill.get(historyItem.skillId);
+    if (!persisted || persisted.attemptCount === 0) return historyItem;
+    const base =
+      MASTERY_RANK[persisted.mastery] >= MASTERY_RANK[historyItem.mastery]
+        ? persisted
+        : historyItem;
+    const mastery =
+      MASTERY_RANK[persisted.mastery] >= MASTERY_RANK[historyItem.mastery]
+        ? persisted.mastery
+        : historyItem.mastery;
+    return {
+      ...base,
+      mastery,
+      attemptCount: Math.max(historyItem.attemptCount, persisted.attemptCount),
+      validAttemptCount: Math.max(historyItem.validAttemptCount, persisted.validAttemptCount),
+      lastAttemptAtMs: Math.max(historyItem.lastAttemptAtMs ?? 0, persisted.lastAttemptAtMs ?? 0),
+      reviewRecommended: historyItem.reviewRecommended || persisted.reviewRecommended,
+    };
+  });
+}
+
+function confirmedRangeFromLearnerProfile(
+  profile: LearnerProfile | null | undefined,
+): { lowMidi: number; highMidi: number } | null {
+  if (profile?.comfortable_low_midi == null || profile.comfortable_high_midi == null) return null;
+  try {
+    const state = JSON.parse(profile.state_json) as Record<string, unknown>;
+    if (state.rangeComfortConfirmed !== true) return null;
+  } catch {
+    return null;
+  }
+  return {
+    lowMidi: profile.comfortable_low_midi,
+    highMidi: profile.comfortable_high_midi,
+  };
+}
+
+function learnerProfileForVoice(
+  profile: string,
+  voiceProfile: VoiceProfile | null,
+  learningState: LearningState | null,
+  assistanceOverride: AssistPreset | null,
+  updatedAtMs: number,
+): LearnerProfile {
+  const existing = learningState?.learner_profile;
+  let existingState: Record<string, unknown> = {};
+  try {
+    const parsed = existing?.state_json ? (JSON.parse(existing.state_json) as unknown) : null;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      existingState = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // A malformed optional state blob must not make the learner profile unsavable.
+  }
+  const existingRangeConfirmed =
+    existingState.rangeComfortConfirmed === true &&
+    existing?.comfortable_low_midi != null &&
+    existing.comfortable_high_midi != null;
+  const newRangeConfirmed =
+    voiceProfile?.rangeComfortConfirmed === true &&
+    voiceProfile.rangeCalibrationValid &&
+    canConfirmComfortableRange(
+      voiceProfile,
+      voiceProfile.rangeComfortRating ?? null,
+      voiceProfile.rangeEffortRating ?? null,
+    );
+  const newRangeReflectionRecorded =
+    voiceProfile?.rangeComfortRating != null && voiceProfile.rangeEffortRating != null;
+  const keepConfirmedRange =
+    newRangeConfirmed || (existingRangeConfirmed && !newRangeReflectionRecorded);
+  return {
+    profile,
+    curriculum_version: Math.max(1, existing?.curriculum_version ?? 1),
+    current_stage: existing?.current_stage ?? "ready",
+    comfortable_low_midi: newRangeConfirmed
+      ? voiceProfile.lowMidi
+      : keepConfirmedRange
+        ? (existing?.comfortable_low_midi ?? null)
+        : null,
+    comfortable_high_midi: newRangeConfirmed
+      ? voiceProfile.highMidi
+      : keepConfirmedRange
+        ? (existing?.comfortable_high_midi ?? null)
+        : null,
+    reliable_low_midi: voiceProfile?.rangeCalibrationValid
+      ? voiceProfile.tessituraLowMidi
+      : (existing?.reliable_low_midi ?? null),
+    reliable_high_midi: voiceProfile?.rangeCalibrationValid
+      ? voiceProfile.tessituraHighMidi
+      : (existing?.reliable_high_midi ?? null),
+    explored_low_midi: voiceProfile?.lowMidi ?? existing?.explored_low_midi ?? null,
+    explored_high_midi: voiceProfile?.highMidi ?? existing?.explored_high_midi ?? null,
+    assistance_override: assistanceOverride ?? existing?.assistance_override ?? null,
+    device_calibration_json: voiceProfile
+      ? JSON.stringify({
+          schemaVersion: 1,
+          microphoneScore: voiceProfile.microphoneScore,
+          noiseFloorDb: voiceProfile.noiseFloorDb,
+          clippingPercent: voiceProfile.clippingPercent,
+          rangeClippingPercent: voiceProfile.rangeClippingPercent,
+          rangeVoicedPercent: voiceProfile.rangeVoicedPercent,
+          rangeCalibrationValid: voiceProfile.rangeCalibrationValid,
+          checkedAtMs: voiceProfile.checkedAt,
+        })
+      : (existing?.device_calibration_json ?? null),
+    state_json: JSON.stringify({
+      ...existingState,
+      schemaVersion: 1,
+      assessmentComplete: voiceProfile?.assessmentComplete ?? false,
+      rangeComfortConfirmed: keepConfirmedRange,
+      rangeComfortRating: voiceProfile?.rangeComfortRating ?? null,
+      rangeEffortRating: voiceProfile?.rangeEffortRating ?? null,
+      pendingRangeCheckedAtMs: voiceProfile && !newRangeConfirmed ? voiceProfile.checkedAt : null,
+    }),
+    updated_at_ms: Math.round(updatedAtMs),
+  };
+}
+
 function exerciseScoresFromSessions(sessions: PracticeSession[]): Record<string, number> {
   const scores: Record<string, number> = {};
   for (const session of sessions) {
@@ -115,8 +270,9 @@ function exerciseScoresFromSessions(sessions: PracticeSession[]): Record<string,
       const payload = JSON.parse(session.performance_json) as {
         score?: unknown;
         completed?: unknown;
+        measurable?: unknown;
       };
-      if (payload.completed === false) continue;
+      if (payload.completed === false || payload.measurable === false) continue;
       if (typeof payload.score === "number" && Number.isFinite(payload.score)) {
         scores[exerciseId] = payload.score;
       }
@@ -172,6 +328,9 @@ interface Exercise {
 
 interface ActiveExerciseRun {
   exercise: Exercise;
+  lessonId: string | null;
+  attemptKind: AttemptKind;
+  assistPreset: AssistPreset;
   baseMidi: number;
   pattern: number[];
   secondsPerNote: number;
@@ -179,6 +338,7 @@ interface ActiveExerciseRun {
   startedAt: number;
   profile: string;
   previousScore: number | null;
+  rhythmEvents?: readonly RhythmTargetEvent[];
 }
 
 const EXERCISES: Exercise[] = [
@@ -242,6 +402,15 @@ const EXERCISES: Exercise[] = [
     secondsPerNote: 1.1,
   },
   {
+    id: "rhythm",
+    title: "Start and release",
+    category: "Timing",
+    instruction:
+      "Begin each easy note on the pulse, release at the end, and leave clear silence between notes. Headphones give the cleanest timing evidence.",
+    pattern: [0, 0, 0, 0],
+    secondsPerNote: 0.75,
+  },
+  {
     id: "dynamics",
     title: "Even dynamics",
     category: "Expression",
@@ -259,12 +428,36 @@ const EXERCISES: Exercise[] = [
   },
 ];
 
+const RANGE_SAFE_EXERCISE_VARIATIONS: Record<string, number[][]> = {
+  center: [[0, 2, 4, 2, 0]],
+  intervals: [[0, 2, 0, 3, 0, 2, 0]],
+  scale: [[0, 2, 4, 2, 0]],
+  arpeggio: [
+    [0, 4, 7, 4, 0],
+    [0, 3, 5, 3, 0],
+  ],
+  slides: [[0, 3, 1, 4, 2, 0]],
+};
+
 const TABS: Array<{ id: StudioTab; label: string; icon: typeof Activity }> = [
-  { id: "checkup", label: "Checkup", icon: Activity },
-  { id: "exercises", label: "Exercises", icon: Dumbbell },
-  { id: "songs", label: "Song Practice", icon: LibraryBig },
-  { id: "history", label: "History", icon: History },
+  { id: "learn", label: "Learn", icon: Route },
+  { id: "exercises", label: "Skills", icon: Dumbbell },
+  { id: "songs", label: "Song Coach", icon: LibraryBig },
+  { id: "history", label: "Progress", icon: History },
 ];
+
+const LESSON_EXERCISE: Record<string, string> = {
+  "hear-and-explore.direction-glides": "slides",
+  "pitch-imitation.single-note-echo": "intervals",
+  "center-and-hold.center-the-note": "center",
+  "center-and-hold.steady-sustain": "sustain",
+  "move-between-notes.two-note-steps": "intervals",
+  "move-between-notes.follow-the-contour": "slides",
+  "time-and-rhythm.start-on-the-beat": "rhythm",
+  "time-and-rhythm.hold-the-length": "rhythm",
+  "patterns-and-memory.five-note-echo": "scale",
+  "perform-and-express.shape-the-dynamics": "dynamics",
+};
 
 function midiName(midi: number | null): string {
   if (midi == null || !Number.isFinite(midi)) return "--";
@@ -320,6 +513,19 @@ function scheduleTone(
   oscillator.connect(gain).connect(context.destination);
   oscillator.start(start);
   oscillator.stop(start + duration + 0.02);
+}
+
+function scheduleMetronomeClick(context: AudioContext, start: number, accented: boolean): void {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "triangle";
+  oscillator.frequency.value = accented ? 1_320 : 990;
+  gain.gain.setValueAtTime(0, start);
+  gain.gain.linearRampToValueAtTime(accented ? 0.09 : 0.055, start + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.045);
+  oscillator.connect(gain).connect(context.destination);
+  oscillator.start(start);
+  oscillator.stop(start + 0.05);
 }
 
 function SignalStrip({
@@ -488,8 +694,10 @@ export function VocalStudioPage() {
   const profilesLoaded = profiles != null;
   const micDevices = useMicDevices();
   const { mutate: updateConfig, isLoading: inputChanging } = useConfigMutation();
-  const [tab, setTab] = useState<StudioTab>("checkup");
+  const [tab, setTab] = useState<StudioTab>("learn");
   const [voiceProfile, setVoiceProfile] = useState<VoiceProfile | null>(null);
+  const [rangeComfortRating, setRangeComfortRating] = useState<number | null>(null);
+  const [rangeEffortRating, setRangeEffortRating] = useState<number | null>(null);
   const [checkupRunning, setCheckupRunning] = useState(false);
   const [checkupSeconds, setCheckupSeconds] = useState(CHECKUP_DURATION_SECONDS);
   const [checkupElapsed, setCheckupElapsed] = useState(0);
@@ -499,11 +707,16 @@ export function VocalStudioPage() {
   const checkupFinishing = useRef(false);
   const checkupCuesScheduled = useRef(false);
   const [history, setHistory] = useState<PracticeSession[]>([]);
+  const [learningState, setLearningState] = useState<LearningState | null>(null);
+  const [techniqueReflections, setTechniqueReflections] = useState<TechniqueReflection[]>([]);
   const recordingPreview = useRecordingPreview();
   const [historyTakes, setHistoryTakes] = useState<Record<string, RecordingTake>>({});
   const [recoveringTakeId, setRecoveringTakeId] = useState<string | null>(null);
   const [exerciseHistoryScores, setExerciseHistoryScores] = useState<Record<string, number>>({});
   const [selectedExercise, setSelectedExercise] = useState(EXERCISES[0]);
+  const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
+  const [selectedAttemptKind, setSelectedAttemptKind] = useState<AttemptKind>("lesson");
+  const [exerciseAssistPreset, setExerciseAssistPreset] = useState<AssistPreset>("guided");
   const [runningExercise, setRunningExercise] = useState<string | null>(null);
   const [exercisePhase, setExercisePhase] = useState<ExercisePhase | null>(null);
   const [exerciseStopping, setExerciseStopping] = useState(false);
@@ -540,11 +753,31 @@ export function VocalStudioPage() {
   const listeningSingStarted = useRef(0);
   const listeningSingAttempted = useRef(false);
   const listeningSetStartedAt = useRef<number | null>(null);
+  const activeProfileRef = useRef(activeProfile);
+  const voiceProfileRef = useRef(voiceProfile);
+  const learningStateRef = useRef(learningState);
+  const techniqueReflectionsRef = useRef(techniqueReflections);
+  activeProfileRef.current = activeProfile;
+  voiceProfileRef.current = voiceProfile;
+  learningStateRef.current = learningState;
+  techniqueReflectionsRef.current = techniqueReflections;
 
+  const confirmedComfortableRange = useMemo(
+    () => confirmedRangeFromLearnerProfile(learningState?.learner_profile),
+    [learningState?.learner_profile],
+  );
+  const practiceRange = useMemo(() => {
+    if (confirmedComfortableRange) return confirmedComfortableRange;
+    if (!voiceProfile?.rangeCalibrationValid) return null;
+    return {
+      lowMidi: voiceProfile.tessituraLowMidi,
+      highMidi: voiceProfile.tessituraHighMidi,
+    };
+  }, [confirmedComfortableRange, voiceProfile]);
   const baseMidi = useMemo(() => {
-    if (!voiceProfile) return 60;
-    return Math.round((voiceProfile.lowMidi + voiceProfile.highMidi) / 2) - 3;
-  }, [voiceProfile]);
+    if (!practiceRange) return 60;
+    return Math.round((practiceRange.lowMidi + practiceRange.highMidi) / 2) - 3;
+  }, [practiceRange]);
   const [checkupBaseMidi, setCheckupBaseMidi] = useState(baseMidi);
   const checkupBaseMidiRef = useRef(baseMidi);
   const recordingsDirectory = useMemo(
@@ -560,10 +793,11 @@ export function VocalStudioPage() {
       adaptExerciseToRange(
         selectedExercise.pattern,
         baseMidi,
-        voiceProfile?.lowMidi ?? null,
-        voiceProfile?.highMidi ?? null,
+        practiceRange?.lowMidi ?? null,
+        practiceRange?.highMidi ?? null,
+        RANGE_SAFE_EXERCISE_VARIATIONS[selectedExercise.id] ?? [],
       ),
-    [baseMidi, selectedExercise.pattern, voiceProfile],
+    [baseMidi, practiceRange, selectedExercise.pattern],
   );
   const selectedExercisePace = adaptExercisePace(
     selectedExercise.secondsPerNote,
@@ -578,6 +812,13 @@ export function VocalStudioPage() {
         .sort((left, right) => right.startedAt - left.startedAt),
     [history],
   );
+  const learningProgress = useMemo(() => {
+    const historyProgress = buildLearningProgressFromHistory(
+      history,
+      voiceProfile?.assessmentComplete === true,
+    );
+    return mergeLearningProgress(historyProgress, learningStateToSkillProgress(learningState));
+  }, [history, learningState, voiceProfile?.assessmentComplete]);
 
   const capture = useMicCapture(
     config?.preferred_mic ?? null,
@@ -603,7 +844,9 @@ export function VocalStudioPage() {
     selectedPitchPlan.baseMidi + (selectedPitchPlan.pattern[0] ?? 0);
   const visibleExerciseNoteMidi = exerciseNoteMidi ?? firstSelectedExerciseMidi;
   const exerciseDisplayTargetMidi =
-    selectedExercise.mode === "listening" ? targetMidi : visibleExerciseNoteMidi;
+    selectedExercise.mode === "listening" || selectedExercise.id === "rhythm"
+      ? targetMidi
+      : visibleExerciseNoteMidi;
 
   useEffect(() => {
     visualPitchTracker.current.reset();
@@ -627,6 +870,19 @@ export function VocalStudioPage() {
       } else {
         const run = activeExerciseRun.current;
         const elapsedSec = (performance.now() - exerciseStart.current) / 1000;
+        if (run?.rhythmEvents) {
+          const event = rhythmTargetEventAt(elapsedSec, run.rhythmEvents);
+          exerciseFrames.current.push({
+            elapsed_sec: Math.max(0, elapsedSec),
+            target_midi: event?.target_midi ?? run.baseMidi,
+            target_active: event != null,
+            target_event_id: event?.id,
+            target_start_sec: event?.start_sec,
+            target_end_sec: event?.end_sec,
+            frame: latestFrame,
+          });
+          return;
+        }
         const scoringTarget = run
           ? exerciseScoringTargetAt(
               elapsedSec,
@@ -668,9 +924,42 @@ export function VocalStudioPage() {
       toast.error("Not enough steady voice was detected. Try again closer to the microphone.");
       return;
     }
-    const completed: VoiceProfile = { ...next, assessmentComplete: true };
+    const completed: VoiceProfile = {
+      ...next,
+      assessmentComplete: true,
+      rangeComfortConfirmed: false,
+      rangeComfortRating: null,
+      rangeEffortRating: null,
+    };
+    setRangeComfortRating(null);
+    setRangeEffortRating(null);
     setVoiceProfile(completed);
     saveStoredVoiceProfile(activeProfile, completed);
+    const savedAtMs = Date.now();
+    const currentLearningState = learningStateRef.current;
+    void saveLearnerProfile({
+      learner_profile: learnerProfileForVoice(
+        activeProfile,
+        completed,
+        currentLearningState,
+        exerciseAssistPreset,
+        savedAtMs,
+      ),
+      technique_preferences: aggregateTechniquePreferences(
+        activeProfile,
+        techniqueReflectionsRef.current,
+        currentLearningState?.technique_preferences ?? [],
+      ),
+    })
+      .then(() => loadLearningState(activeProfile))
+      .then((state) => {
+        if (activeProfileRef.current === activeProfile) setLearningState(state);
+      })
+      .catch((error) =>
+        toast.error(
+          `Save learning profile: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
     const now = Math.floor(Date.now() / 1000);
     const durationSeconds = checkupSessionDuration(elapsedSeconds);
     const score = vocalCheckupScore(completed);
@@ -692,7 +981,50 @@ export function VocalStudioPage() {
       .catch((error) =>
         toast.error(`Checkup history: ${error instanceof Error ? error.message : String(error)}`),
       );
-  }, [activeProfile]);
+  }, [activeProfile, exerciseAssistPreset]);
+
+  const saveRangeReflection = useCallback(() => {
+    if (!voiceProfile || rangeComfortRating == null || rangeEffortRating == null) return;
+    const confirmed = canConfirmComfortableRange(
+      voiceProfile,
+      rangeComfortRating,
+      rangeEffortRating,
+    );
+    const updated: VoiceProfile = {
+      ...voiceProfile,
+      rangeComfortConfirmed: confirmed,
+      rangeComfortRating,
+      rangeEffortRating,
+    };
+    voiceProfileRef.current = updated;
+    setVoiceProfile(updated);
+    saveStoredVoiceProfile(activeProfile, updated);
+    const currentLearningState = learningStateRef.current;
+    void saveLearnerProfile({
+      learner_profile: learnerProfileForVoice(
+        activeProfile,
+        updated,
+        currentLearningState,
+        null,
+        Date.now(),
+      ),
+      technique_preferences: currentLearningState?.technique_preferences ?? [],
+    })
+      .then(() => loadLearningState(activeProfile))
+      .then((state) => {
+        if (activeProfileRef.current === activeProfile) setLearningState(state);
+        toast.success(
+          confirmed
+            ? "Comfortable range confirmed for safe exercise limits."
+            : "Range saved as explored only. Safe limits were not expanded.",
+        );
+      })
+      .catch((error) =>
+        toast.error(
+          `Save range reflection: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+  }, [activeProfile, rangeComfortRating, rangeEffortRating, voiceProfile]);
 
   useEffect(() => {
     if (!checkupRunning) return;
@@ -741,6 +1073,7 @@ export function VocalStudioPage() {
     const storedProfile = loadStoredVoiceProfile(activeProfile);
     setVoiceProfile(storedProfile);
     setHistory([]);
+    setLearningState(null);
     setHistoryTakes({});
     setExerciseHistoryScores({});
 
@@ -759,10 +1092,74 @@ export function VocalStudioPage() {
           toast.error(`History: ${error instanceof Error ? error.message : String(error)}`);
         }
       });
+    void loadLearningState(activeProfile)
+      .then((state) => {
+        if (!cancelled) setLearningState(state);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(
+            `Learning progress: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      });
     return () => {
       cancelled = true;
     };
   }, [activeProfile, profilesLoaded]);
+
+  useEffect(() => {
+    setRangeComfortRating(voiceProfile?.rangeComfortRating ?? null);
+    setRangeEffortRating(voiceProfile?.rangeEffortRating ?? null);
+  }, [activeProfile, voiceProfile?.checkedAt]);
+
+  useEffect(() => {
+    if (!profilesLoaded) return;
+    try {
+      const stored = localStorage.getItem(`nightingale-technique-reflections:${activeProfile}`);
+      const parsed = stored ? (JSON.parse(stored) as unknown) : [];
+      setTechniqueReflections(Array.isArray(parsed) ? (parsed as TechniqueReflection[]) : []);
+    } catch {
+      setTechniqueReflections([]);
+    }
+  }, [activeProfile, profilesLoaded]);
+
+  const saveTechniqueReflection = useCallback(
+    (reflection: TechniqueReflection) => {
+      const next = [...techniqueReflectionsRef.current, reflection].slice(-100);
+      techniqueReflectionsRef.current = next;
+      setTechniqueReflections(next);
+      localStorage.setItem(
+        `nightingale-technique-reflections:${activeProfile}`,
+        JSON.stringify(next),
+      );
+      const currentLearningState = learningStateRef.current;
+      void saveLearnerProfile({
+        learner_profile: learnerProfileForVoice(
+          activeProfile,
+          voiceProfileRef.current,
+          currentLearningState,
+          null,
+          reflection.recordedAt,
+        ),
+        technique_preferences: aggregateTechniquePreferences(
+          activeProfile,
+          next,
+          currentLearningState?.technique_preferences ?? [],
+        ),
+      })
+        .then(() => loadLearningState(activeProfile))
+        .then((state) => {
+          if (activeProfileRef.current === activeProfile) setLearningState(state);
+        })
+        .catch((error) =>
+          toast.error(
+            `Save technique preference: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+    },
+    [activeProfile],
+  );
 
   useEffect(() => {
     if (tab !== "history") return;
@@ -854,7 +1251,8 @@ export function VocalStudioPage() {
       completed: boolean,
       durationSeconds: number,
     ) => {
-      const endedAt = Math.floor(Date.now() / 1000);
+      const endedAtMs = Date.now();
+      const endedAt = Math.floor(endedAtMs / 1000);
       const session: SavePracticeSession = {
         id: take?.session_id ?? `exercise-${run.exercise.id}-${Date.now()}`,
         profile: run.profile,
@@ -863,7 +1261,7 @@ export function VocalStudioPage() {
         started_at: run.startedAt,
         ended_at: endedAt,
         performance_json: JSON.stringify({
-          score: result.overall,
+          score: result.measurable ? result.overall : null,
           exercise: run.exercise.title,
           baseMidi: run.baseMidi,
           pattern: run.pattern,
@@ -871,6 +1269,16 @@ export function VocalStudioPage() {
           previousScore: run.previousScore,
           metrics: result.metrics,
           recommendations: result.recommendations,
+          observations: result.observations,
+          measurable: result.measurable,
+          measurementMessage: result.measurementMessage,
+          learningAttempt: {
+            schemaVersion: 1,
+            assistPreset: run.assistPreset,
+            validEvidence: result.measurable,
+            lessonId: run.lessonId,
+            attemptKind: run.attemptKind,
+          },
           completed,
           durationSeconds: Number(Math.max(0, durationSeconds).toFixed(2)),
         }),
@@ -878,12 +1286,46 @@ export function VocalStudioPage() {
         transport_segments: [],
       };
       await savePracticeSession(session);
+      try {
+        const currentVoiceProfile = voiceProfileRef.current;
+        const request = buildExerciseLearningAttemptRequest({
+          exerciseId: run.exercise.id,
+          lessonId: run.lessonId ?? undefined,
+          attemptKind: run.attemptKind,
+          result,
+          profile: run.profile,
+          startedAtMs: run.startedAt * 1_000,
+          endedAtMs,
+          completed,
+          assistPreset: run.assistPreset,
+          practiceSessionId: session.id,
+          recordingTakeId: take?.id ?? null,
+          range: {
+            reliableLowMidi: currentVoiceProfile?.rangeCalibrationValid
+              ? currentVoiceProfile.tessituraLowMidi
+              : undefined,
+            reliableHighMidi: currentVoiceProfile?.rangeCalibrationValid
+              ? currentVoiceProfile.tessituraHighMidi
+              : undefined,
+            exploredLowMidi: currentVoiceProfile?.lowMidi,
+            exploredHighMidi: currentVoiceProfile?.highMidi,
+          },
+          assistanceOverride: run.assistPreset,
+          learningState: learningStateRef.current,
+          techniqueReflections: techniqueReflectionsRef.current,
+        });
+        await saveLearningAttempt(request);
+        const refreshed = await loadLearningState(run.profile);
+        if (activeProfileRef.current === run.profile) setLearningState(refreshed);
+      } catch (error) {
+        toast.error(`Learning progress: ${error instanceof Error ? error.message : String(error)}`);
+      }
       setHistory((current) => [session, ...current.filter((item) => item.id !== session.id)]);
       if (take) {
         setHistoryTakes((current) => ({ ...current, [take.id]: take }));
       }
       setExerciseTake(take);
-      if (completed) {
+      if (completed && result.measurable) {
         setExerciseHistoryScores((current) => ({
           ...current,
           [run.exercise.id]: result.overall,
@@ -923,7 +1365,7 @@ export function VocalStudioPage() {
           exerciseFrames.current,
           Math.max(0.1, elapsedSeconds),
         );
-        setExerciseScore(result.overall);
+        setExerciseScore(result.measurable ? result.overall : null);
         setExerciseResult(result);
         setExerciseCompleted(false);
         await persistExerciseAttempt(run, result, take, false, elapsedSeconds);
@@ -948,10 +1390,16 @@ export function VocalStudioPage() {
   }, []);
 
   const selectExercise = useCallback(
-    (exercise: Exercise) => {
-      if (exercise.id === selectedExercise.id) return;
+    (exercise: Exercise, lessonId: string | null = null, attemptKind: AttemptKind = "lesson") => {
+      if (exercise.id === selectedExercise.id) {
+        setSelectedLessonId(lessonId);
+        setSelectedAttemptKind(attemptKind);
+        return;
+      }
       if (selectedExercise.mode === "listening") resetListeningPrompt();
       setSelectedExercise(exercise);
+      setSelectedLessonId(lessonId);
+      setSelectedAttemptKind(attemptKind);
     },
     [resetListeningPrompt, selectedExercise.id, selectedExercise.mode],
   );
@@ -968,8 +1416,9 @@ export function VocalStudioPage() {
       const pitchPlan = adaptExerciseToRange(
         exercise.pattern,
         baseMidi,
-        voiceProfile?.lowMidi ?? null,
-        voiceProfile?.highMidi ?? null,
+        practiceRange?.lowMidi ?? null,
+        practiceRange?.highMidi ?? null,
+        RANGE_SAFE_EXERCISE_VARIATIONS[exercise.id] ?? [],
       );
       const exerciseBaseMidi = pitchPlan.baseMidi;
       const exercisePattern = pitchPlan.pattern;
@@ -1002,8 +1451,19 @@ export function VocalStudioPage() {
       const context = new AudioContext();
       exerciseContext.current = context;
       const callAndResponse = exercise.mode === "call-response";
-      const leadIn = callAndResponse ? 0.35 : 1.1;
-      if (callAndResponse) {
+      const rhythmDefinition =
+        exercise.id === "rhythm" ? createRhythmOnsetExercise(exerciseBaseMidi, 80) : null;
+      const leadIn = rhythmDefinition ? 0.05 : callAndResponse ? 0.35 : 1.1;
+      if (rhythmDefinition) {
+        const beatSeconds = 60 / rhythmDefinition.bpm;
+        for (let beat = 0; beat <= 8; beat += 1) {
+          scheduleMetronomeClick(
+            context,
+            context.currentTime + leadIn + beat * beatSeconds,
+            beat % 4 === 0,
+          );
+        }
+      } else if (callAndResponse) {
         exercisePattern.forEach((offset, index) => {
           const stride = secondsPerNote * 2;
           const start = context.currentTime + leadIn + index * stride;
@@ -1019,13 +1479,14 @@ export function VocalStudioPage() {
         );
       }
       exerciseStart.current = performance.now() + leadIn * 1000;
-      const totalSeconds = exerciseTotalSeconds(
-        exercisePattern.length,
-        secondsPerNote,
-        callAndResponse,
-      );
+      const totalSeconds =
+        rhythmDefinition?.totalSeconds ??
+        exerciseTotalSeconds(exercisePattern.length, secondsPerNote, callAndResponse);
       const run: ActiveExerciseRun = {
         exercise,
+        lessonId: selectedLessonId,
+        attemptKind: selectedAttemptKind,
+        assistPreset: exerciseAssistPreset,
         baseMidi: exerciseBaseMidi,
         pattern: exercisePattern,
         secondsPerNote,
@@ -1033,6 +1494,7 @@ export function VocalStudioPage() {
         startedAt: Math.floor(Date.now() / 1000),
         profile: activeProfile,
         previousScore: exerciseHistoryScores[exercise.id] ?? null,
+        rhythmEvents: rhythmDefinition?.events,
       };
       activeExerciseRun.current = run;
       const totalMs = totalSeconds * 1000;
@@ -1042,6 +1504,13 @@ export function VocalStudioPage() {
           setExercisePhase("listen");
           setExerciseNoteMidi(exerciseBaseMidi + (exercisePattern[0] ?? 0));
           setTargetMidi(null);
+          return;
+        }
+        if (rhythmDefinition && elapsed < totalMs) {
+          const event = rhythmTargetEventAt(elapsed / 1000, rhythmDefinition.events);
+          setExercisePhase(event ? "sing" : "listen");
+          setExerciseNoteMidi(exerciseBaseMidi);
+          setTargetMidi(event?.target_midi ?? null);
           return;
         }
         const step = exerciseStepAt(
@@ -1059,8 +1528,7 @@ export function VocalStudioPage() {
         }
         if (elapsed >= totalMs) {
           const result = analyzeExercise(exercise.id, exerciseFrames.current, totalSeconds);
-          const score = result.overall;
-          setExerciseScore(score);
+          setExerciseScore(result.measurable ? result.overall : null);
           setExerciseResult(result);
           setExerciseCompleted(true);
           activeExerciseRun.current = null;
@@ -1090,10 +1558,13 @@ export function VocalStudioPage() {
       activeProfile,
       recordExercises,
       exerciseHistoryScores,
+      exerciseAssistPreset,
+      practiceRange,
       persistExerciseAttempt,
+      selectedLessonId,
+      selectedAttemptKind,
       stopExercise,
       stopExerciseRecording,
-      voiceProfile,
     ],
   );
 
@@ -1303,6 +1774,41 @@ export function VocalStudioPage() {
     ],
   );
 
+  const openLearningLesson = useCallback(
+    (lessonId: string, assistPreset?: AssistPreset, attemptKind: AttemptKind = "lesson") => {
+      const lesson = STARTER_LESSONS.find((candidate) => candidate.id === lessonId);
+      if (lesson) setExerciseAssistPreset(assistPreset ?? lesson.defaultAssistPreset);
+      if (lessonId === "ready.setup-check") {
+        changeTab("checkup");
+        return;
+      }
+      if (
+        lessonId === "song-phrases.short-phrase-transfer" ||
+        lessonId === "perform-and-express.consistent-performance"
+      ) {
+        changeTab("songs");
+        return;
+      }
+      const exerciseId = LESSON_EXERCISE[lessonId];
+      const exercise = EXERCISES.find((candidate) => candidate.id === exerciseId);
+      if (!exercise) {
+        changeTab("exercises");
+        return;
+      }
+      selectExercise(exercise, lessonId, attemptKind);
+      changeTab("exercises");
+    },
+    [changeTab, selectExercise],
+  );
+
+  const openTechniqueLab = useCallback(() => {
+    changeTab("exercises");
+    window.setTimeout(
+      () => document.getElementById("technique-lab")?.scrollIntoView({ behavior: "smooth" }),
+      0,
+    );
+  }, [changeTab]);
+
   const recoverRecordingMix = useCallback(
     async (session: PracticeSession, take: RecordingTake) => {
       if (recoveringTakeId || !session.song_hash) return;
@@ -1387,21 +1893,24 @@ export function VocalStudioPage() {
           aria-label="Vocal Studio views"
           className="mb-5 flex overflow-x-auto border-b border-border"
         >
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              aria-current={tab === id ? "page" : undefined}
-              onClick={() => changeTab(id)}
-              className={`flex h-11 shrink-0 items-center gap-2 border-b-2 px-4 text-sm ${
-                tab === id
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Icon className="size-4" /> {label}
-            </button>
-          ))}
+          {TABS.map(({ id, label, icon: Icon }) => {
+            const active = tab === id || (tab === "checkup" && id === "learn");
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-current={active ? "page" : undefined}
+                onClick={() => changeTab(id)}
+                className={`flex h-11 shrink-0 items-center gap-2 border-b-2 px-4 text-sm ${
+                  active
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Icon className="size-4" /> {label}
+              </button>
+            );
+          })}
         </nav>
 
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1441,7 +1950,11 @@ export function VocalStudioPage() {
         </div>
 
         <SignalStrip
-          frame={displayPitchFrame}
+          frame={
+            tab === "exercises" && exerciseAssistPreset === "independent" && runningExercise != null
+              ? null
+              : displayPitchFrame
+          }
           active={capture.active && pitchActive}
           captureActive={capture.active}
           error={capture.error}
@@ -1449,11 +1962,27 @@ export function VocalStudioPage() {
           targetMidi={
             checkupRunning
               ? checkupStage.targetMidi
-              : tab === "exercises"
+              : tab === "exercises" && exerciseAssistPreset === "full"
                 ? exerciseDisplayTargetMidi
                 : null
           }
         />
+
+        {tab === "learn" && (
+          <LearningHome
+            progress={learningProgress}
+            comfortableRange={
+              confirmedComfortableRange
+                ? `${midiName(confirmedComfortableRange.lowMidi)} – ${midiName(confirmedComfortableRange.highMidi)}`
+                : null
+            }
+            onOpenSetup={() => changeTab("checkup")}
+            onStartLesson={openLearningLesson}
+            onOpenTechnique={openTechniqueLab}
+            onOpenSongs={() => changeTab("songs")}
+            onOpenProgress={() => changeTab("history")}
+          />
+        )}
 
         {tab === "checkup" && (
           <section className="py-8">
@@ -1495,7 +2024,7 @@ export function VocalStudioPage() {
                 </div>
               </div>
               <div className="border-l border-border pl-6">
-                <p className="text-xs font-medium text-muted-foreground">COMFORTABLE RANGE</p>
+                <p className="text-xs font-medium text-muted-foreground">EXPLORED RANGE</p>
                 <p className="mt-3 text-3xl font-semibold tabular-nums">
                   {voiceProfile
                     ? `${midiName(voiceProfile.lowMidi)} - ${midiName(voiceProfile.highMidi)}`
@@ -1509,7 +2038,16 @@ export function VocalStudioPage() {
                       {midiName(voiceProfile.tessituraHighMidi)}
                     </p>
                     <p className="mt-3 text-sm text-muted-foreground">
-                      Exercises center near {midiName(baseMidi + 3)} and stay inside this range.
+                      Exercises center near {midiName(baseMidi + 3)} and use only confirmed or
+                      reliable central limits.
+                    </p>
+                    <p className="mt-4 text-xs font-medium text-muted-foreground">
+                      CONFIRMED COMFORTABLE RANGE
+                    </p>
+                    <p className="mt-1 text-lg font-medium tabular-nums">
+                      {confirmedComfortableRange
+                        ? `${midiName(confirmedComfortableRange.lowMidi)} - ${midiName(confirmedComfortableRange.highMidi)}`
+                        : "Awaiting your comfort check"}
                     </p>
                   </>
                 )}
@@ -1527,7 +2065,7 @@ export function VocalStudioPage() {
                 <div className="flex items-end justify-between gap-4">
                   <h3 className="text-sm font-semibold">Latest assessment</h3>
                   <p className="text-xs text-muted-foreground">
-                    Overall{" "}
+                    Singing{" "}
                     <span className="text-2xl font-semibold tabular-nums text-foreground">
                       {vocalCheckupScore(voiceProfile)}
                     </span>
@@ -1536,7 +2074,6 @@ export function VocalStudioPage() {
                 </div>
                 <div className="mt-4 grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
                   {[
-                    ["Microphone", voiceProfile.microphoneScore],
                     ["Pitch match", voiceProfile.pitchMatchScore],
                     ["Intervals", voiceProfile.intervalMatchScore],
                     ["Stability", voiceProfile.stabilityScore],
@@ -1553,9 +2090,87 @@ export function VocalStudioPage() {
                   ))}
                 </div>
                 <p className="mt-4 text-xs text-muted-foreground">
-                  Noise floor {voiceProfile.noiseFloorDb} dB, clipping{" "}
-                  {voiceProfile.clippingPercent}%
+                  Input quality {voiceProfile.microphoneScore}/100 · noise floor{" "}
+                  {voiceProfile.noiseFloorDb} dB · clipping {voiceProfile.clippingPercent}%. Input
+                  quality is shown separately and never raises or lowers your singing score.
                 </p>
+                <div className="mt-5 border-y border-border py-5">
+                  <p className="text-xs font-medium text-primary">SAFE RANGE CONFIRMATION</p>
+                  <h4 className="mt-1 text-base font-semibold">
+                    Were both glide endpoints genuinely easy?
+                  </h4>
+                  <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                    Rate the lowest and highest notes together. Nightingale only turns the explored
+                    endpoints into exercise limits when the recording is clean, comfort is 4–5, and
+                    maximum effort is 1–2.
+                  </p>
+                  {!voiceProfile.rangeCalibrationValid && (
+                    <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">
+                      This glide had {voiceProfile.rangeClippingPercent}% clipped frames or too few
+                      reliable pitch frames. Retake it before expanding safe limits.
+                    </p>
+                  )}
+                  <div className="mt-4 grid gap-5 sm:grid-cols-2">
+                    <fieldset>
+                      <legend className="text-xs font-medium">Comfort at both endpoints</legend>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {[1, 2, 3, 4, 5].map((rating) => (
+                          <Button
+                            key={`range-comfort-${rating}`}
+                            type="button"
+                            size="sm"
+                            variant={rangeComfortRating === rating ? "default" : "outline"}
+                            aria-pressed={rangeComfortRating === rating}
+                            onClick={() => setRangeComfortRating(rating)}
+                          >
+                            {rating}
+                          </Button>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        1 = uncomfortable · 5 = fully comfortable
+                      </p>
+                    </fieldset>
+                    <fieldset>
+                      <legend className="text-xs font-medium">Highest effort anywhere</legend>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {[1, 2, 3, 4, 5].map((rating) => (
+                          <Button
+                            key={`range-effort-${rating}`}
+                            type="button"
+                            size="sm"
+                            variant={rangeEffortRating === rating ? "default" : "outline"}
+                            aria-pressed={rangeEffortRating === rating}
+                            onClick={() => setRangeEffortRating(rating)}
+                          >
+                            {rating}
+                          </Button>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        1 = easy · 5 = maximum effort
+                      </p>
+                    </fieldset>
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      disabled={rangeComfortRating == null || rangeEffortRating == null}
+                      onClick={saveRangeReflection}
+                    >
+                      {canConfirmComfortableRange(
+                        voiceProfile,
+                        rangeComfortRating,
+                        rangeEffortRating,
+                      )
+                        ? "Confirm comfortable limits"
+                        : "Save as explored only"}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Pain, strain, rawness, or hoarseness means stop and choose 1.
+                    </p>
+                  </div>
+                </div>
                 {voiceProfile.recommendations.length > 0 && (
                   <div className="mt-5 border-t border-border pt-4">
                     <p className="text-xs font-medium text-muted-foreground">NEXT PRACTICE</p>
@@ -1592,8 +2207,31 @@ export function VocalStudioPage() {
               ))}
             </div>
             <div className="min-w-0 py-2">
-              <p className="text-xs font-medium text-primary">{selectedExercise.category}</p>
-              <h2 className="mt-1 text-2xl font-semibold">{selectedExercise.title}</h2>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-medium text-primary">{selectedExercise.category}</p>
+                  <h2 className="mt-1 text-2xl font-semibold">{selectedExercise.title}</h2>
+                </div>
+                <div className="min-w-52">
+                  <Select
+                    value={exerciseAssistPreset}
+                    disabled={runningExercise != null || exerciseStopping}
+                    onValueChange={(value) => setExerciseAssistPreset(value as AssistPreset)}
+                  >
+                    <SelectTrigger aria-label="Learning assistance">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="full">Full guide</SelectItem>
+                      <SelectItem value="guided">Guided</SelectItem>
+                      <SelectItem value="independent">Independent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1 text-[0.625rem] text-muted-foreground">
+                    Assistance changes cues, not scoring strictness.
+                  </p>
+                </div>
+              </div>
               <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
                 {selectedExercise.instruction}
               </p>
@@ -1807,9 +2445,13 @@ export function VocalStudioPage() {
                       </p>
                       <p className="mt-2 h-5 truncate text-sm text-primary tabular-nums">
                         {exercisePhase === "listen"
-                          ? "Listen now. Your turn is next."
+                          ? selectedExercise.id === "rhythm"
+                            ? "Leave a clear space. Begin on the next pulse."
+                            : "Listen now. Your turn is next."
                           : exercisePhase === "sing"
-                            ? `Sing and hold ${midiName(visibleExerciseNoteMidi)}`
+                            ? selectedExercise.id === "rhythm"
+                              ? `Sing ${midiName(visibleExerciseNoteMidi)} for this pulse`
+                              : `Sing and hold ${midiName(visibleExerciseNoteMidi)}`
                             : exerciseScore != null
                               ? `${exerciseCompleted === false ? "Partial accuracy" : "Last accuracy"} ${exerciseScore}%`
                               : `Ready at ${midiName(visibleExerciseNoteMidi)}`}
@@ -1844,20 +2486,27 @@ export function VocalStudioPage() {
                   </p>
                   {exerciseResult && (
                     <div className="mt-5 max-w-xl border-t border-border pt-4">
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        {exerciseResult.metrics.map((metric) => (
-                          <div key={metric.label} className="border-b border-border pb-2">
-                            <div className="flex justify-between gap-3 text-xs">
-                              <span className="text-muted-foreground">{metric.label}</span>
-                              <span className="font-medium tabular-nums">{metric.score}</span>
+                      {exerciseResult.measurable && (
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          {exerciseResult.metrics.map((metric) => (
+                            <div key={metric.label} className="border-b border-border pb-2">
+                              <div className="flex justify-between gap-3 text-xs">
+                                <span className="text-muted-foreground">{metric.label}</span>
+                                <span className="font-medium tabular-nums">{metric.score}</span>
+                              </div>
+                              <Progress value={metric.score} className="mt-2 h-1 rounded-none" />
                             </div>
-                            <Progress value={metric.score} className="mt-2 h-1 rounded-none" />
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      )}
                       {exerciseResult.recommendations.map((recommendation) => (
                         <p key={recommendation} className="mt-2 text-xs text-muted-foreground">
                           {recommendation}
+                        </p>
+                      ))}
+                      {exerciseResult.observations.map((observation) => (
+                        <p key={observation} className="mt-2 text-xs text-primary">
+                          {observation}
                         </p>
                       ))}
                     </div>
@@ -1877,6 +2526,35 @@ export function VocalStudioPage() {
                   )}
                 </>
               )}
+
+              <div id="technique-lab" className="mt-10 scroll-mt-24">
+                <UpperRangeLadder
+                  active={tab === "exercises" && runningExercise == null}
+                  microphoneActive={capture.active}
+                  deviceId={config?.preferred_mic ?? capture.deviceName ?? "system-default"}
+                  latestPitchFrame={latestFrame?.voiced ? latestFrame : null}
+                  startMidi={
+                    learningState?.learner_profile?.reliable_high_midi ??
+                    (confirmedComfortableRange ? confirmedComfortableRange.highMidi - 2 : null) ??
+                    baseMidi + 3
+                  }
+                  bounds={{
+                    comfortableLowMidi: confirmedComfortableRange?.lowMidi ?? null,
+                    comfortableHighMidi: confirmedComfortableRange?.highMidi ?? null,
+                  }}
+                  reflections={techniqueReflections}
+                  onReflection={saveTechniqueReflection}
+                />
+                <TechniqueLab
+                  active={tab === "exercises" && runningExercise == null}
+                  microphoneActive={capture.active}
+                  deviceId={config?.preferred_mic ?? capture.deviceName ?? "system-default"}
+                  latestPitchHz={latestFrame?.voiced ? latestFrame.hz : null}
+                  targetMidi={baseMidi + 3}
+                  reflections={techniqueReflections}
+                  onReflection={saveTechniqueReflection}
+                />
+              </div>
             </div>
           </section>
         )}
@@ -1885,8 +2563,9 @@ export function VocalStudioPage() {
           <section className="py-10">
             <h2 className="text-xl font-semibold">Practice with your songs</h2>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              Choose an analyzed track, then use Coach for note-by-note guidance or Game for streaks
-              and performance scoring.
+              Choose an analyzed track, then use Coach for note-by-note guidance or Perform for
+              streaks and performance scoring. Loop a short phrase, slow it down, sing it with the
+              guide, then remove help and try the full phrase.
             </p>
             <Button type="button" className="mt-6" onClick={() => navigate("/")}>
               <LibraryBig className="size-4" /> Open library
@@ -1898,7 +2577,7 @@ export function VocalStudioPage() {
           <section className="py-6">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
-                <h2 className="text-xl font-semibold">Practice history</h2>
+                <h2 className="text-xl font-semibold">Learning progress</h2>
                 <p
                   className="mt-1 max-w-2xl truncate text-xs text-muted-foreground"
                   title={recordingsDirectory ?? undefined}
@@ -1923,6 +2602,34 @@ export function VocalStudioPage() {
               </Button>
             </div>
             <RecordingPreview preview={recordingPreview} />
+            <div className="mb-6 border-y border-border py-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">SKILL EVIDENCE</p>
+                  <p className="mt-1 text-sm">
+                    Helped practice, independent control, and song transfer are tracked separately.
+                  </p>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Repeated valid attempts build mastery; one score is never a diagnosis.
+                </span>
+              </div>
+              <div className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+                {learningProgress.map((skill) => (
+                  <div
+                    key={skill.skillId}
+                    className="flex items-center justify-between border-b border-border pb-2"
+                  >
+                    <span className="text-sm capitalize">
+                      {skill.skillId.replace(".", " · ").split("-").join(" ")}
+                    </span>
+                    <span className="text-xs capitalize text-muted-foreground">
+                      {skill.mastery}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
             {checkupHistoryScores[0] && (
               <div className="mb-6 border-y border-border py-4">
                 <p className="text-xs font-medium text-muted-foreground">VOICE CHECKUP PROGRESS</p>

@@ -24,7 +24,7 @@ use crate::song::{Song, SongOrigin};
 use super::connection::{with_conn, with_conn_mut};
 use super::songs::{append_songs, update_library_meta};
 
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 
 static MIGRATING: AtomicBool = AtomicBool::new(false);
 static MIGRATION_TOTAL: AtomicUsize = AtomicUsize::new(0);
@@ -171,6 +171,93 @@ pub(super) fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
             );",
         )?;
     }
+    if v < 6 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS learner_profiles (
+                profile TEXT PRIMARY KEY,
+                curriculum_version INTEGER NOT NULL DEFAULT 1 CHECK (curriculum_version >= 1),
+                current_stage TEXT NOT NULL DEFAULT 'ready',
+                comfortable_low_midi REAL,
+                comfortable_high_midi REAL,
+                reliable_low_midi REAL,
+                reliable_high_midi REAL,
+                explored_low_midi REAL,
+                explored_high_midi REAL,
+                assistance_override TEXT,
+                device_calibration_json TEXT
+                    CHECK (device_calibration_json IS NULL OR json_valid(device_calibration_json)),
+                state_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(state_json)),
+                updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
+            );
+
+            CREATE TABLE IF NOT EXISTS learning_attempts (
+                id TEXT PRIMARY KEY,
+                profile TEXT NOT NULL REFERENCES learner_profiles(profile) ON DELETE CASCADE,
+                skill_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                lesson_version INTEGER NOT NULL DEFAULT 1 CHECK (lesson_version >= 1),
+                stage TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                intent TEXT NOT NULL,
+                assist_preset TEXT NOT NULL,
+                scoring_policy_id TEXT,
+                song_hash TEXT,
+                practice_session_id TEXT,
+                recording_take_id TEXT,
+                target_id TEXT,
+                unfamiliar_target INTEGER NOT NULL DEFAULT 0
+                    CHECK (unfamiliar_target IN (0, 1)),
+                started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0),
+                ended_at_ms INTEGER NOT NULL CHECK (ended_at_ms >= started_at_ms),
+                ranked INTEGER NOT NULL DEFAULT 0 CHECK (ranked IN (0, 1)),
+                valid_evidence INTEGER NOT NULL CHECK (valid_evidence IN (0, 1)),
+                completion_reason TEXT NOT NULL,
+                score REAL,
+                signal_confidence REAL,
+                evidence_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(evidence_json)),
+                context_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(context_json))
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_attempts_profile_time
+                ON learning_attempts(profile, started_at_ms DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_learning_attempts_profile_skill_time
+                ON learning_attempts(profile, skill_id, started_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_learning_attempts_profile_lesson_time
+                ON learning_attempts(profile, lesson_id, started_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS learner_progress (
+                profile TEXT NOT NULL REFERENCES learner_profiles(profile) ON DELETE CASCADE,
+                skill_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                mastery_state TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+                valid_attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (valid_attempt_count >= 0),
+                rolling_score REAL,
+                next_review_at_ms INTEGER
+                    CHECK (next_review_at_ms IS NULL OR next_review_at_ms >= 0),
+                last_attempt_at_ms INTEGER
+                    CHECK (last_attempt_at_ms IS NULL OR last_attempt_at_ms >= 0),
+                review_recommended INTEGER NOT NULL DEFAULT 0
+                    CHECK (review_recommended IN (0, 1)),
+                state_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(state_json)),
+                updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+                PRIMARY KEY (profile, skill_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_learner_progress_review
+                ON learner_progress(profile, next_review_at_ms);
+
+            CREATE TABLE IF NOT EXISTS technique_preferences (
+                profile TEXT NOT NULL REFERENCES learner_profiles(profile) ON DELETE CASCADE,
+                cue_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                helpful_count INTEGER NOT NULL DEFAULT 0 CHECK (helpful_count >= 0),
+                unhelpful_count INTEGER NOT NULL DEFAULT 0 CHECK (unhelpful_count >= 0),
+                last_effort_delta REAL,
+                details_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(details_json)),
+                updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+                PRIMARY KEY (profile, cue_id)
+            );",
+        )?;
+    }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
 }
@@ -279,4 +366,65 @@ pub fn rewrite_legacy_jellyfin_paths(cache_dir: &Path) -> rusqlite::Result<()> {
         }
         tx.commit()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrates_v5_to_v6_without_changing_existing_practice_data() {
+        let connection = Connection::open_in_memory().unwrap();
+        configure(&connection).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE practice_sessions (
+                    id TEXT PRIMARY KEY,
+                    profile TEXT NOT NULL,
+                    song_hash TEXT,
+                    kind TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    ended_at INTEGER,
+                    performance_json TEXT,
+                    recording_take_id TEXT,
+                    transport_json TEXT NOT NULL DEFAULT '[]'
+                );
+                INSERT INTO practice_sessions
+                    (id, profile, kind, started_at, transport_json)
+                    VALUES ('legacy-session', 'Singer', 'exercise', 123, '[]');
+                PRAGMA user_version = 5;",
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+
+        let version: i32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let legacy_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM practice_sessions WHERE id = 'legacy-session'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 6);
+        assert_eq!(legacy_count, 1);
+
+        for table in [
+            "learner_profiles",
+            "learning_attempts",
+            "learner_progress",
+            "technique_preferences",
+        ] {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "missing migrated table {table}");
+        }
+    }
 }

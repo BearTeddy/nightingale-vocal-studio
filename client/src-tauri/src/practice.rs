@@ -23,3 +23,30 @@ pub fn list_practice_sessions(
 pub fn load_recording_take(id: String) -> Result<Option<app_core::RecordingTake>, String> {
     app_core::load_recording_take(&id)
 }
+
+#[tauri::command]
+pub fn load_learning_state(profile: String) -> Result<app_core::LearningState, String> {
+    app_core::load_learning_state(&profile)
+}
+
+#[tauri::command]
+pub fn save_learning_attempt(request: app_core::SaveLearningAttemptRequest) -> Result<(), String> {
+    app_core::save_learning_attempt(request)
+}
+
+#[tauri::command]
+pub fn save_learner_profile(request: app_core::SaveLearnerProfileRequest) -> Result<(), String> {
+    app_core::save_learner_profile(request)
+}
+
+#[tauri::command]
+pub fn list_learning_attempts(
+    query: app_core::ListLearningAttemptsQuery,
+) -> Result<app_core::LearningAttemptPage, String> {
+    app_core::list_learning_attempts(query)
+}
+
+#[tauri::command]
+pub fn delete_learning_state(profile: String) -> Result<(), String> {
+    app_core::delete_learning_state(&profile)
+}

@@ -3,6 +3,7 @@ mod cache;
 mod config;
 mod desktop_shortcut;
 mod error;
+mod learning;
 mod library_db;
 mod library_menu;
 mod library_model;
@@ -35,6 +36,12 @@ pub use cache::{
 };
 pub use config::{AppConfig, LibrarySource};
 pub use desktop_shortcut::ensure_data_shortcut;
+pub use learning::{
+    LearnerProfile, LearnerProgress, LearningAttempt, LearningAttemptPage, LearningState,
+    ListLearningAttemptsQuery, SaveLearnerProfileRequest, SaveLearningAttemptRequest,
+    TechniquePreference, delete_learning_state, list_learning_attempts, load_learning_state,
+    save_learner_profile, save_learning_attempt,
+};
 pub use library_db::{init_library, library_db_path};
 pub use library_menu::{LibraryMenuItem, LibraryMenuItems, load_library_menu_items};
 pub use library_model::{LibraryMenuFilters, LoadSongsParams, SongsMeta, SongsStore};

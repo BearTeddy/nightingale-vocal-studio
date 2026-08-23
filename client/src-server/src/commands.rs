@@ -501,6 +501,53 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             let take = app_core::load_recording_take(&args.id).map_err(ApiError::bad_request)?;
             Ok(serde_json::to_value(take).map_err(serde_err)?)
         }
+        "load_learning_state" => {
+            #[derive(Deserialize)]
+            struct Args {
+                profile: String,
+            }
+            let args: Args = deserialize(payload)?;
+            let state =
+                app_core::load_learning_state(&args.profile).map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(state).map_err(serde_err)?)
+        }
+        "save_learning_attempt" => {
+            #[derive(Deserialize)]
+            struct Args {
+                request: app_core::SaveLearningAttemptRequest,
+            }
+            let args: Args = deserialize(payload)?;
+            app_core::save_learning_attempt(args.request).map_err(ApiError::bad_request)?;
+            Ok(Value::Null)
+        }
+        "save_learner_profile" => {
+            #[derive(Deserialize)]
+            struct Args {
+                request: app_core::SaveLearnerProfileRequest,
+            }
+            let args: Args = deserialize(payload)?;
+            app_core::save_learner_profile(args.request).map_err(ApiError::bad_request)?;
+            Ok(Value::Null)
+        }
+        "list_learning_attempts" => {
+            #[derive(Deserialize)]
+            struct Args {
+                query: app_core::ListLearningAttemptsQuery,
+            }
+            let args: Args = deserialize(payload)?;
+            let page =
+                app_core::list_learning_attempts(args.query).map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(page).map_err(serde_err)?)
+        }
+        "delete_learning_state" => {
+            #[derive(Deserialize)]
+            struct Args {
+                profile: String,
+            }
+            let args: Args = deserialize(payload)?;
+            app_core::delete_learning_state(&args.profile).map_err(ApiError::bad_request)?;
+            Ok(Value::Null)
+        }
 
         _ => Err(ApiError(
             StatusCode::NOT_FOUND,

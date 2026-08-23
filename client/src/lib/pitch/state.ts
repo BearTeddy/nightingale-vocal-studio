@@ -340,7 +340,7 @@ const CATEGORY_LABELS: Record<CategoryScore["key"], string> = {
   stability: "Stability",
   sustain: "Sustain",
   dynamics: "Dynamics",
-  technique: "Technique",
+  technique: "Expression contour",
 };
 
 function average(values: number[]): number {
@@ -765,7 +765,7 @@ function coachingFor(key: CategoryScore["key"]): string {
     case "dynamics":
       return "Shape phrases with controlled volume changes instead of sudden level jumps.";
     case "technique":
-      return "Keep sustained notes straight before introducing deliberate vibrato or slides.";
+      return "Listen to the phrase shape, then copy its slides and pitch movement deliberately.";
   }
 }
 
