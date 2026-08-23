@@ -24,7 +24,7 @@ use crate::song::{Song, SongOrigin};
 use super::connection::{with_conn, with_conn_mut};
 use super::songs::{append_songs, update_library_meta};
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 static MIGRATING: AtomicBool = AtomicBool::new(false);
 static MIGRATION_TOTAL: AtomicUsize = AtomicUsize::new(0);
@@ -159,6 +159,16 @@ pub(super) fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute_batch(
             "ALTER TABLE practice_sessions
              ADD COLUMN transport_json TEXT NOT NULL DEFAULT '[]';",
+        )?;
+    }
+    if v < 5 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS hidden_songs (
+                source_label TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                hidden_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (source_label, source_key)
+            );",
         )?;
     }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;

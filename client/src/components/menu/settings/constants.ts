@@ -74,6 +74,19 @@ export const LYRICS_HORIZONTAL_POSITIONS: SettingsOption[] = [
   { value: "right", label: "Right" },
 ];
 
+export const MIC_MONITOR_MODES: SettingsOption[] = [
+  {
+    value: "low_latency",
+    label: "Low latency",
+    description: "Small native audio buffers for wired headphones and USB audio interfaces.",
+  },
+  {
+    value: "compatible",
+    label: "Compatible",
+    description: "A larger safety buffer for devices that crackle or drop out in Low latency mode.",
+  },
+];
+
 export const DEFAULTS = {
   separator: "karaoke",
   asr_engine: "whisper",
@@ -83,8 +96,10 @@ export const DEFAULTS = {
   beam_size: 8,
   batch_size: 8,
   mic_monitor_gain: 0.65,
+  mic_monitor_mode: "low_latency",
   mic_latency_compensation_sec: DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
   auto_analyze: false,
+  verify_melody_analysis: false,
   lyrics_vertical_position: "bottom",
   lyrics_horizontal_position: "center",
 } satisfies Pick<
@@ -97,8 +112,10 @@ export const DEFAULTS = {
   | "beam_size"
   | "batch_size"
   | "mic_monitor_gain"
+  | "mic_monitor_mode"
   | "mic_latency_compensation_sec"
   | "auto_analyze"
+  | "verify_melody_analysis"
   | "lyrics_vertical_position"
   | "lyrics_horizontal_position"
 >;
@@ -120,9 +137,10 @@ export const NAV = {
     window: 1,
     microphone: 2,
     micMonitorGain: 3,
-    micLatency: 4,
-    lyricsVerticalPosition: 5,
-    lyricsHorizontalPosition: 6,
+    micMonitorMode: 4,
+    micLatency: 5,
+    lyricsVerticalPosition: 6,
+    lyricsHorizontalPosition: 7,
   },
 } as const;
 
@@ -139,8 +157,9 @@ export function getAnalysisNav(isParakeet: boolean) {
         beamSize: -1,
         alignBackend: 3,
         autoAnalyze: 4,
-        vocalThreshold: 5,
-        batchSize: 6,
+        verifyMelody: 5,
+        vocalThreshold: 6,
+        batchSize: 7,
       }
     : {
         separator: 1,
@@ -149,17 +168,18 @@ export function getAnalysisNav(isParakeet: boolean) {
         beamSize: 4,
         alignBackend: 5,
         autoAnalyze: 6,
-        vocalThreshold: 7,
-        batchSize: 8,
+        verifyMelody: 7,
+        vocalThreshold: 8,
+        batchSize: 9,
       };
 }
 
 export function getSettingsStops(tab: SettingsTab, isParakeet: boolean) {
   if (tab === "general") {
-    return [2, 2, 1, 1, 2, 1, 1, 2];
+    return [2, 2, 1, 1, 1, 2, 1, 1, 2];
   }
 
   return isParakeet
-    ? [2, 1, 1, 1, 2, 1, NUMBER_PICKER_SIZE, 2]
-    : [2, 1, 1, 1, NUMBER_PICKER_SIZE, 1, 2, 1, NUMBER_PICKER_SIZE, 2];
+    ? [2, 1, 1, 1, 2, 2, 1, NUMBER_PICKER_SIZE, 2]
+    : [2, 1, 1, 1, NUMBER_PICKER_SIZE, 1, 2, 2, 1, NUMBER_PICKER_SIZE, 2];
 }

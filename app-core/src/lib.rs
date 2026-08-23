@@ -16,6 +16,7 @@ mod recording;
 mod scanner;
 mod secret;
 mod song;
+mod song_removal;
 mod source;
 mod usdx;
 mod vendor;
@@ -42,7 +43,9 @@ pub use lyrics::{
     save_lyrics_and_realign, search_lrclib_for_hash,
 };
 pub use media_server::MediaEndpoint;
-pub use melody::{MelodyMap, TargetNote, load_melody_map, rebuild_melody_map, save_melody_map};
+pub use melody::{
+    MelodyMap, TargetNote, load_melody_map, rebuild_melody_map, save_melody_map, verify_melody_map,
+};
 pub use playback::{
     AudioPaths, PixabayVideoDownloaded, ShiftDone, ShiftResult, StemsReady,
     download_pixabay_videos, ensure_mp3_stems, ensure_mp3_stems_ready_payload,
@@ -59,6 +62,7 @@ pub use recording::{
 };
 pub use scanner::{start_scan, start_scan_and_analyze};
 pub use song::SongOrigin;
+pub use song_removal::{RemoveSongResult, remove_song};
 pub use source::{
     JellyfinAuth, JellyfinSource, MediaSource, NavidromeAuth, NavidromeSource, PlexAuth,
     PlexSource, SourceKind, active_source,

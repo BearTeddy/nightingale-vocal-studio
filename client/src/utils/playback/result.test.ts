@@ -5,10 +5,11 @@ import type { ScoreRecord } from "@/types/ScoreRecord";
 import { personalBestForRun, strictRawScore, topScoresForSong } from "./result";
 
 const records: ScoreRecord[] = [
-  { profile: "A", song_hash: "song", score: 760, played_at: 1n },
-  { profile: "A", song_hash: "song", score: 820, played_at: 2n },
-  { profile: "B", song_hash: "song", score: 910, played_at: 3n },
-  { profile: "A", song_hash: "other", score: 990, played_at: 4n },
+  { profile: "A", song_hash: "song", score: 760, played_at: 1n, difficulty: "medium" },
+  { profile: "A", song_hash: "song", score: 820, played_at: 2n, difficulty: "medium" },
+  { profile: "B", song_hash: "song", score: 910, played_at: 3n, difficulty: "medium" },
+  { profile: "A", song_hash: "other", score: 990, played_at: 4n, difficulty: "medium" },
+  { profile: "A", song_hash: "song", score: 990, played_at: 5n, difficulty: "easy" },
 ];
 
 describe("playback result", () => {
@@ -50,5 +51,13 @@ describe("playback result", () => {
       { profile: "B", score: 910 },
       { profile: "A", score: 820 },
     ]);
+  });
+
+  it("keeps personal bests and boards separate by difficulty", () => {
+    expect(personalBestForRun(records, "song", "A", 900, "pro")).toMatchObject({
+      previousScore: null,
+      isNewBest: true,
+    });
+    expect(topScoresForSong(records, "song", 5, "easy")).toEqual([{ profile: "A", score: 990 }]);
   });
 });

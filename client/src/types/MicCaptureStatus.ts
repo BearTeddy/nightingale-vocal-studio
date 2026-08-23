@@ -11,4 +11,15 @@ export type MicCaptureStatus = {
   pitch_errors: number;
   rms: number;
   peak: number;
+  monitor_requested: boolean;
+  monitor_available: boolean;
+  monitor_active: boolean;
+  monitor_input_sample_rate: number;
+  monitor_output_sample_rate: number;
+  monitor_buffered_frames: number;
+  monitor_target_frames: number;
+  monitor_underruns: number;
+  monitor_overruns: number;
+  monitor_estimated_latency_ms: number;
+  monitor_mode: string;
 };

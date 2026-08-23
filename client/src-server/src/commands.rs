@@ -74,6 +74,19 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             app_core::clear_videos();
             Ok(Value::Null)
         }
+        "remove_song" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                file_hash: String,
+                path: String,
+                delete_source: bool,
+            }
+            let args: Args = deserialize(payload)?;
+            let result = app_core::remove_song(&args.file_hash, &args.path, args.delete_source)
+                .map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(result).map_err(serde_err)?)
+        }
 
         // ── Profile ──────────────────────────────────────────────────────
         "load_profiles" => Ok(serde_json::to_value(ProfileStore::load()).map_err(serde_err)?),
@@ -101,10 +114,15 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             struct Args {
                 song_hash: String,
                 score: u32,
+                difficulty: Option<String>,
             }
             let args: Args = deserialize(payload)?;
             let mut store = ProfileStore::load();
-            store.add_score(&args.song_hash, args.score);
+            store.add_score(
+                &args.song_hash,
+                args.score,
+                args.difficulty.as_deref().unwrap_or("medium"),
+            );
             Ok(Value::Null)
         }
 
@@ -374,6 +392,15 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             let args: FileHashArgs = deserialize(payload)?;
             let map =
                 tokio::task::spawn_blocking(move || app_core::rebuild_melody_map(&args.file_hash))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(map).map_err(serde_err)?)
+        }
+        "verify_melody_map" => {
+            let args: FileHashArgs = deserialize(payload)?;
+            let map =
+                tokio::task::spawn_blocking(move || app_core::verify_melody_map(&args.file_hash))
                     .await
                     .map_err(blocking_task_err)?
                     .map_err(ApiError::bad_request)?;

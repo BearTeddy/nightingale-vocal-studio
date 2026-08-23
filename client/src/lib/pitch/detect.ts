@@ -3,6 +3,7 @@ import { PitchDetector } from "pitchy";
 import {
   MAX_PITCH_HZ,
   MIC_PITCH_CLARITY_THRESHOLD,
+  MIC_CLIPPED_PEAK,
   MIC_RMS_GATE,
   MIN_PITCH_HZ,
   PITCH_CLARITY_THRESHOLD,
@@ -59,7 +60,7 @@ export function detectPitchFromSamplesMic(
   if (samples.length !== PITCH_WINDOW_SAMPLES) {
     throw new Error(`Expected ${PITCH_WINDOW_SAMPLES} samples`);
   }
-  if (samplesRms(samples) < MIC_RMS_GATE) {
+  if (samplesRms(samples) < MIC_RMS_GATE || samplesPeak(samples) >= MIC_CLIPPED_PEAK) {
     return null;
   }
   const [hz, clarity] = detector.findPitch(samples, sampleRate);
@@ -90,7 +91,7 @@ export function detectMicPitchDetails(
   }
   const level = samplesRms(samples);
   const peak = samplesPeak(samples);
-  if (level < MIC_RMS_GATE) {
+  if (level < MIC_RMS_GATE || peak >= MIC_CLIPPED_PEAK) {
     return { hz: null, clarity: 0, rms: level, peak };
   }
   const [hz, clarity] = detector.findPitch(samples, sampleRate);

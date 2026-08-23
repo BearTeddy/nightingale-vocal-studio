@@ -24,6 +24,13 @@ pub async fn rebuild_melody_map(file_hash: String) -> Result<app_core::MelodyMap
 }
 
 #[tauri::command]
+pub async fn verify_melody_map(file_hash: String) -> Result<app_core::MelodyMap, String> {
+    tauri::async_runtime::spawn_blocking(move || app_core::verify_melody_map(&file_hash))
+        .await
+        .map_err(|error| format!("Pitch-guide verification task failed: {error}"))?
+}
+
+#[tauri::command]
 pub fn get_audio_paths(file_hash: String) -> AudioPaths {
     app_core::get_audio_paths(&file_hash)
 }

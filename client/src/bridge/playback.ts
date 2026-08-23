@@ -9,6 +9,7 @@ import {
   loadTranscript as tauriLoadTranscript,
   loadMelodyMap as tauriLoadMelodyMap,
   rebuildMelodyMap as tauriRebuildMelodyMap,
+  verifyMelodyMap as tauriVerifyMelodyMap,
   saveMelodyMap as tauriSaveMelodyMap,
   onPixabayVideoDownloaded as tauriOnPixabayVideoDownloaded,
   onStemsReady as tauriOnStemsReady,
@@ -108,6 +109,7 @@ export const playbackAdapter: PlaybackAdapter = isTauri ? tauriPlaybackAdapter :
 export const loadTranscript = tauriLoadTranscript;
 export const loadMelodyMap = tauriLoadMelodyMap;
 export const rebuildMelodyMap = tauriRebuildMelodyMap;
+export const verifyMelodyMap = tauriVerifyMelodyMap;
 export const saveMelodyMap = tauriSaveMelodyMap;
 export const ensureMp3Stems = tauriEnsureMp3Stems;
 export const ensurePlayableSourceVideo = tauriEnsurePlayableSourceVideo;

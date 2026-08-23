@@ -1,5 +1,6 @@
 import { invoke, listen } from "./runtime";
 import type { LibraryMenuFilters } from "@/types/LibraryMenuFilters";
+import type { RemoveSongResult } from "@/types/RemoveSongResult";
 import { ShiftDone } from "@/types/ShiftDone";
 
 export const enqueueOne = async (fileHash: string): Promise<void> => {
@@ -12,6 +13,14 @@ export const enqueueAll = async (filters: LibraryMenuFilters): Promise<void> => 
 
 export const deleteSongCache = async (fileHash: string): Promise<void> => {
   return await invoke<void>("delete_song_cache", { fileHash });
+};
+
+export const removeSong = async (
+  fileHash: string,
+  path: string,
+  deleteSource: boolean,
+): Promise<RemoveSongResult> => {
+  return await invoke<RemoveSongResult>("remove_song", { fileHash, path, deleteSource });
 };
 
 export const reanalyzeTranscript = async (fileHash: string, language?: string): Promise<void> => {

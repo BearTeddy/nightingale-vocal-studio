@@ -21,6 +21,8 @@ MAX_GAP_SEC = 0.07
 NOTE_CHANGE_SEMITONES = 0.7
 STRICT_CONFIDENCE = 0.55
 SILENCE_RMS_GATE = 0.003
+VERIFICATION_MATCH_SEMITONES = 0.8
+VERIFICATION_OCTAVE_TOLERANCE = 0.8
 
 
 def _load_mono(path: str) -> tuple[np.ndarray, int]:
@@ -129,6 +131,83 @@ def _correct_isolated_octave_jumps(
     return corrected
 
 
+def _verified_consensus(
+    primary_pitch: np.ndarray,
+    primary_confidence: np.ndarray,
+    secondary_pitch: np.ndarray,
+    secondary_confidence: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Keep frames independently supported by two pitch detectors.
+
+    Disagreements close to a whole octave are resolved against recent verified
+    context (or toward the lower candidate at the start of a phrase), which
+    removes the common high-harmonic spike without flattening a real high note
+    that both detectors agree on.
+    """
+    frame_count = min(
+        len(primary_pitch),
+        len(primary_confidence),
+        len(secondary_pitch),
+        len(secondary_confidence),
+    )
+    pitch = np.full(frame_count, np.nan, dtype=np.float32)
+    confidence = np.zeros(frame_count, dtype=np.float32)
+    recent_midi: list[float] = []
+    matched = 0
+    octave_resolved = 0
+    rejected = 0
+
+    for index in range(frame_count):
+        first_hz = float(primary_pitch[index])
+        second_hz = float(secondary_pitch[index])
+        first_conf = float(primary_confidence[index])
+        second_conf = float(secondary_confidence[index])
+        valid = all(
+            math.isfinite(value) and value > 0
+            for value in (first_hz, second_hz, first_conf, second_conf)
+        )
+        if not valid or first_conf < 0.2 or second_conf < 0.2:
+            rejected += 1
+            continue
+
+        first_midi = _midi(first_hz)
+        second_midi = _midi(second_hz)
+        difference = abs(first_midi - second_midi)
+        chosen_midi: float | None = None
+
+        if difference <= VERIFICATION_MATCH_SEMITONES:
+            weight = max(0.001, first_conf + second_conf)
+            chosen_midi = (first_midi * first_conf + second_midi * second_conf) / weight
+            matched += 1
+        else:
+            octave_distance = abs(difference - round(difference / 12.0) * 12.0)
+            if difference >= 10.0 and octave_distance <= VERIFICATION_OCTAVE_TOLERANCE:
+                if recent_midi:
+                    reference = float(np.median(np.asarray(recent_midi[-15:], dtype=np.float32)))
+                    chosen_midi = min(
+                        (first_midi, second_midi),
+                        key=lambda candidate: abs(candidate - reference),
+                    )
+                else:
+                    chosen_midi = min(first_midi, second_midi)
+                octave_resolved += 1
+
+        if chosen_midi is None:
+            rejected += 1
+            continue
+
+        pitch[index] = 440.0 * (2.0 ** ((chosen_midi - 69.0) / 12.0))
+        confidence[index] = math.sqrt(first_conf * second_conf)
+        recent_midi.append(chosen_midi)
+
+    return pitch, confidence, {
+        "matched_frames": matched,
+        "octave_frames_resolved": octave_resolved,
+        "rejected_frames": rejected,
+        "total_frames": frame_count,
+    }
+
+
 def _word_windows(transcript: dict) -> list[tuple[int, float, float]]:
     words = []
     word_index = 0
@@ -213,7 +292,13 @@ def _segment_notes(
     return notes
 
 
-def generate_melody(vocals_path: str, output_path: str, transcript: dict, device: str) -> dict:
+def generate_melody(
+    vocals_path: str,
+    output_path: str,
+    transcript: dict,
+    device: str,
+    verify: bool = False,
+) -> dict:
     audio, sample_rate = _load_mono(vocals_path)
     backend_error = None
     try:
@@ -221,6 +306,21 @@ def generate_melody(vocals_path: str, output_path: str, transcript: dict, device
     except Exception as error:
         backend_error = str(error)
         pitch, confidence, source = _extract_pyin(audio, sample_rate)
+
+    verification = None
+    if verify:
+        if source != "torchcrepe":
+            raise RuntimeError(
+                "Deep verification needs TorchCREPE and pYIN; TorchCREPE was unavailable"
+            )
+        secondary_pitch, secondary_confidence, _ = _extract_pyin(audio, sample_rate)
+        pitch, confidence, verification = _verified_consensus(
+            pitch,
+            confidence,
+            secondary_pitch,
+            secondary_confidence,
+        )
+        source = "torchcrepe+pyin-verified"
 
     pitch = _correct_isolated_octave_jumps(pitch, confidence)
     rms = _frame_rms(audio, sample_rate, len(pitch))
@@ -240,6 +340,8 @@ def generate_melody(vocals_path: str, output_path: str, transcript: dict, device
     }
     if backend_error:
         payload["fallback_reason"] = backend_error
+    if verification is not None:
+        payload["verification"] = verification
 
     tmp = f"{output_path}.partial"
     with open(tmp, "w", encoding="utf-8") as file:
@@ -254,6 +356,11 @@ def _main() -> None:
     parser.add_argument("output_path")
     parser.add_argument("transcript_path")
     parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Cross-check every pitch frame with TorchCREPE and pYIN (slow)",
+    )
     args = parser.parse_args()
 
     with open(args.transcript_path, "r", encoding="utf-8") as file:
@@ -268,6 +375,7 @@ def _main() -> None:
         os.path.abspath(args.output_path),
         transcript,
         device,
+        verify=args.verify,
     )
     print(
         json.dumps(

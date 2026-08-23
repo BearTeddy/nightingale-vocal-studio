@@ -46,13 +46,13 @@ interface ActiveCapture {
   source: MediaStreamAudioSourceNode;
   node: AudioWorkletNode;
   stream: MediaStream;
-  monitorGain: GainNode | null;
-  emitAudio: boolean;
+  monitorGain: GainNode;
 }
 
 let active: ActiveCapture | null = null;
 let workletUrl: string | null = null;
 let liveMonitorGain = DEFAULT_MONITOR_GAIN;
+let liveMonitorEnabled = false;
 let sampleIndex = 0;
 
 const ensureWorkletUrl = (): string => {
@@ -79,8 +79,17 @@ export const setWebMicMonitorGain = (value: number): void => {
   const clamped = Math.min(Math.max(value, 0), MAX_MONITOR_GAIN);
   liveMonitorGain = clamped;
   if (active?.monitorGain) {
-    active.monitorGain.gain.value = clamped;
+    active.monitorGain.gain.value = liveMonitorEnabled ? clamped : 0;
   }
+};
+
+export const setWebMicMonitorEnabled = async (enabled: boolean): Promise<void> => {
+  liveMonitorEnabled = enabled;
+  if (!active) return;
+  const { context, monitorGain } = active;
+  const gain = enabled ? liveMonitorGain : 0;
+  monitorGain.gain.cancelScheduledValues(context.currentTime);
+  monitorGain.gain.setTargetAtTime(gain, context.currentTime, 0.005);
 };
 
 const teardown = (): void => {
@@ -92,7 +101,7 @@ const teardown = (): void => {
     // already detached
   }
   try {
-    if (monitorGain) monitorGain.disconnect();
+    monitorGain.disconnect();
   } catch {
     // already detached
   }
@@ -157,7 +166,9 @@ const startCapture = async (
     },
   });
 
-  const context = new AudioContext();
+  const context = new AudioContext({
+    latencyHint: options.monitor_mode === "compatible" ? "balanced" : "interactive",
+  });
   await context.audioWorklet.addModule(ensureWorkletUrl());
 
   const source = context.createMediaStreamSource(stream);
@@ -184,12 +195,10 @@ const startCapture = async (
   source.connect(node);
 
   liveMonitorGain = initialMonitorGain();
-  let monitorGain: GainNode | null = null;
-  if (options.emit_audio) {
-    monitorGain = context.createGain();
-    monitorGain.gain.value = liveMonitorGain;
-    source.connect(monitorGain).connect(context.destination);
-  }
+  liveMonitorEnabled = options.emit_audio;
+  const monitorGain = context.createGain();
+  monitorGain.gain.value = liveMonitorEnabled ? liveMonitorGain : 0;
+  source.connect(monitorGain).connect(context.destination);
 
   active = {
     context,
@@ -197,7 +206,6 @@ const startCapture = async (
     node,
     stream,
     monitorGain,
-    emitAudio: options.emit_audio,
   };
   sampleIndex = 0;
 
@@ -213,5 +221,6 @@ export const webMicrophoneAdapter: MicrophoneAdapter = {
   listDevices,
   startCapture,
   stopCapture,
+  setMonitorEnabled: setWebMicMonitorEnabled,
   onSamples: async (cb) => subscribeMicSamples(cb),
 };

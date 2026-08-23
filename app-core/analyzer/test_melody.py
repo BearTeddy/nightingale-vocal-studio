@@ -27,6 +27,44 @@ class MelodyExtractionTests(unittest.TestCase):
         corrected = melody._correct_isolated_octave_jumps(pitch, np.ones(5, dtype=np.float32))
         np.testing.assert_allclose(corrected, pitch)
 
+    def test_deep_verification_removes_high_octave_spikes(self):
+        primary = np.asarray([220.0, 220.0, 440.0, 220.0], dtype=np.float32)
+        secondary = np.asarray([220.0, 220.0, 220.0, 220.0], dtype=np.float32)
+        verified, confidence, stats = melody._verified_consensus(
+            primary,
+            np.full(4, 0.95, dtype=np.float32),
+            secondary,
+            np.full(4, 0.9, dtype=np.float32),
+        )
+
+        np.testing.assert_allclose(verified, np.full(4, 220.0), atol=0.01)
+        self.assertTrue(np.all(confidence > 0.8))
+        self.assertEqual(stats["octave_frames_resolved"], 1)
+
+    def test_deep_verification_keeps_real_high_notes_when_detectors_agree(self):
+        high = np.full(5, 880.0, dtype=np.float32)
+        verified, _, stats = melody._verified_consensus(
+            high,
+            np.full(5, 0.95, dtype=np.float32),
+            high,
+            np.full(5, 0.9, dtype=np.float32),
+        )
+
+        np.testing.assert_allclose(verified, high, atol=0.01)
+        self.assertEqual(stats["matched_frames"], 5)
+
+    def test_deep_verification_rejects_unrelated_detector_disagreement(self):
+        verified, confidence, stats = melody._verified_consensus(
+            np.asarray([hz_for_midi(69)], dtype=np.float32),
+            np.asarray([0.95], dtype=np.float32),
+            np.asarray([hz_for_midi(74)], dtype=np.float32),
+            np.asarray([0.95], dtype=np.float32),
+        )
+
+        self.assertTrue(np.isnan(verified[0]))
+        self.assertEqual(float(confidence[0]), 0.0)
+        self.assertEqual(stats["rejected_frames"], 1)
+
     def test_vibrato_stays_one_note_but_a_glide_is_segmented(self):
         phase = np.linspace(0.0, math.tau * 5.0, 100, endpoint=False)
         vibrato_midi = 69.0 + np.sin(phase) * 0.3

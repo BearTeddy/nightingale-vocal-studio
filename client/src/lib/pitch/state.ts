@@ -1,11 +1,14 @@
 import {
   PITCH_BUFFER_SIZE,
   PITCH_DISCONTINUITY_SEC,
-  PITCH_FULL_CREDIT_CENTS,
-  PITCH_ZERO_CREDIT_CENTS,
   PITCH_WINDOW_SAMPLES,
   PUSH_INTERVAL_SEC,
 } from "./constants";
+import {
+  scoringDifficultyProfile,
+  type ScoringDifficulty,
+  type ScoringDifficultyProfile,
+} from "./difficulty";
 import { createPitchDetector, detectPitchFromSamplesRef } from "./detect";
 import type { MelodyMap } from "@/types/MelodyMap";
 import type { PerformanceScore, CategoryScore } from "@/types/PerformanceScore";
@@ -72,16 +75,24 @@ export function freqToSemitone(hz: number): number {
   return 12 * Math.log2(hz / 440) + 69;
 }
 
-export function pitchSimilarity(refHz: number, userHz: number): number {
-  return centsSimilarity((freqToSemitone(userHz) - freqToSemitone(refHz)) * 100);
+export function pitchSimilarity(
+  refHz: number,
+  userHz: number,
+  difficulty: ScoringDifficulty = "medium",
+): number {
+  return centsSimilarity((freqToSemitone(userHz) - freqToSemitone(refHz)) * 100, difficulty);
 }
 
-export function centsSimilarity(centsOffset: number): number {
+export function centsSimilarity(
+  centsOffset: number,
+  difficulty: ScoringDifficulty = "medium",
+): number {
+  const profile = scoringDifficultyProfile(difficulty);
   const distance = Math.abs(centsOffset);
-  if (distance <= PITCH_FULL_CREDIT_CENTS) return 1;
-  if (distance >= PITCH_ZERO_CREDIT_CENTS) return 0;
+  if (distance <= profile.fullCreditCents) return 1;
+  if (distance >= profile.zeroCreditCents) return 0;
   return (
-    1 - (distance - PITCH_FULL_CREDIT_CENTS) / (PITCH_ZERO_CREDIT_CENTS - PITCH_FULL_CREDIT_CENTS)
+    1 - (distance - profile.fullCreditCents) / (profile.zeroCreditCents - profile.fullCreditCents)
   );
 }
 
@@ -143,8 +154,7 @@ export class VisualPitchTracker {
         Math.abs(currentMidi - this.pendingJumpMidi) <= VISUAL_JUMP_MATCH_SEMITONES
       ) {
         this.pendingJumpFrames += 1;
-        this.pendingJumpMidi +=
-          (currentMidi - this.pendingJumpMidi) / this.pendingJumpFrames;
+        this.pendingJumpMidi += (currentMidi - this.pendingJumpMidi) / this.pendingJumpFrames;
       } else {
         this.pendingJumpMidi = currentMidi;
         this.pendingJumpFrames = 1;
@@ -510,13 +520,18 @@ export function findTargetNoteAt(notes: readonly TargetNote[], time: number): Ta
 
 export class MelodyPerformanceScoring {
   private readonly notes: TargetNote[];
+  private readonly difficultyProfile: ScoringDifficultyProfile;
   private readonly stats = new Map<string, NoteStats>();
   private currentStreak = 0;
   private finalizedThrough = 0;
   private latestCents: number | null = null;
   private lastTime: number | null = null;
 
-  constructor(melody: MelodyMap) {
+  constructor(
+    melody: MelodyMap,
+    private readonly difficulty: ScoringDifficulty = "medium",
+  ) {
+    this.difficultyProfile = scoringDifficultyProfile(difficulty);
     this.notes = melody.notes.filter((note) => note.eligible).sort((a, b) => a.start - b.start);
     for (const note of this.notes) {
       this.stats.set(note.id, {
@@ -551,7 +566,7 @@ export class MelodyPerformanceScoring {
     if (frame?.voiced && frame.midi != null) {
       const cents = (frame.midi - (note.midi + note.cents / 100)) * 100;
       stats.voiced += 1;
-      stats.similaritySum += centsSimilarity(cents);
+      stats.similaritySum += centsSimilarity(cents, this.difficulty);
       stats.firstVoicedAt ??= time;
       stats.cents.push(cents);
       if (frame.rms > 0 && frame.reference_rms != null && frame.reference_rms > 0) {
@@ -587,7 +602,10 @@ export class MelodyPerformanceScoring {
       this.notes[this.finalizedThrough].end < time
     ) {
       const stats = this.stats.get(this.notes[this.finalizedThrough].id);
-      const hit = stats != null && stats.samples > 0 && stats.similaritySum / stats.samples >= 0.75;
+      const hit =
+        stats != null &&
+        stats.samples > 0 &&
+        stats.similaritySum / stats.samples >= this.difficultyProfile.noteHitThreshold;
       this.currentStreak = hit ? this.currentStreak + 1 : 0;
       this.finalizedThrough += 1;
     }
@@ -606,11 +624,18 @@ export class MelodyPerformanceScoring {
     const timing = average(
       attempted.map((stats) => {
         if (stats.firstVoicedAt == null) return 0;
-        return Math.max(0, 100 - Math.abs(stats.firstVoicedAt - stats.note.start) * 250);
+        return Math.max(
+          0,
+          100 -
+            Math.abs(stats.firstVoicedAt - stats.note.start) *
+              this.difficultyProfile.timingPenaltyPerSecond,
+        );
       }),
     );
     const stability = average(
-      stableNotes.map((stats) => Math.max(0, 100 - deviation(stats.cents))),
+      stableNotes.map((stats) =>
+        Math.max(0, 100 - deviation(stats.cents) * this.difficultyProfile.stabilityPenalty),
+      ),
     );
     const sustain = average(
       longNotes.map((stats) => (stats.voiced / Math.max(1, stats.samples)) * 100),
@@ -679,6 +704,7 @@ export class MelodyPerformanceScoring {
     }));
 
     return {
+      scoring_difficulty: this.difficulty,
       overall: clampScore(overall),
       legacy_score: clampScore(overall) * 10,
       phrase_accuracy: clampScore(pitch),
@@ -695,8 +721,9 @@ export function scorePitchSeries(
   melody: MelodyMap,
   series: PitchSeries,
   latencyCompensationSec = 0,
+  difficulty: ScoringDifficulty = "medium",
 ): PerformanceScore {
-  const scoring = new MelodyPerformanceScoring(melody);
+  const scoring = new MelodyPerformanceScoring(melody, difficulty);
   for (let index = 0; index < series.timestamps.length; index += 1) {
     if (series.discontinuities?.[index]) continue;
     const time = Math.max(0, (series.timestamps[index] ?? 0) - latencyCompensationSec);

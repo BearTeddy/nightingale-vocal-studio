@@ -14,6 +14,7 @@ export interface MicrophoneAdapter {
   listDevices(): Promise<MicrophoneInfo[]>;
   startCapture(preferred: string | null, options: MicCaptureOptions): Promise<string>;
   stopCapture(): Promise<void>;
+  setMonitorEnabled?(enabled: boolean): Promise<void>;
   onSamples(cb: MicSamplesCallback): Promise<StopListening>;
   onPitch?(cb: NativePitchCallback): Promise<StopListening>;
   getCaptureStatus?(): Promise<MicCaptureStatus>;
@@ -64,7 +65,11 @@ export const subscribeNativePitch = (cb: NativePitchCallback): StopListening => 
 
 import { isTauri } from "./runtime";
 import { tauriMicrophoneAdapter } from "./microphone.tauri";
-import { setWebMicMonitorGain, webMicrophoneAdapter } from "./microphone.web";
+import {
+  setWebMicMonitorGain,
+  setWebMicMonitorEnabled,
+  webMicrophoneAdapter,
+} from "./microphone.web";
 
 export { tauriMicrophoneAdapter, webMicrophoneAdapter };
 
@@ -89,4 +94,10 @@ export const stopMicCapture = (): Promise<void> => microphoneAdapter.stopCapture
 export const updateMicMonitorGain = (value: number): void => {
   if (isTauri) return;
   setWebMicMonitorGain(value);
+};
+
+/** Changes sidetone without restarting capture, so pitch scoring stays live. */
+export const updateMicMonitorEnabled = (enabled: boolean): Promise<void> => {
+  if (isTauri) return tauriMicrophoneAdapter.setMonitorEnabled?.(enabled) ?? Promise.resolve();
+  return setWebMicMonitorEnabled(enabled);
 };

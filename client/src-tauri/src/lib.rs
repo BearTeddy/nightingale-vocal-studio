@@ -4,6 +4,7 @@ mod config;
 mod logging;
 mod lyrics;
 mod microphones;
+mod monitor;
 pub mod native_pitch;
 mod playback;
 mod practice;
@@ -13,7 +14,7 @@ mod vendor;
 
 use analyzer::{
     delete_song_cache, enqueue_all, enqueue_one, realign, reanalyze_force_transcribe,
-    reanalyze_full, reanalyze_transcript, shift_key, shift_tempo,
+    reanalyze_full, reanalyze_transcript, remove_song, shift_key, shift_tempo,
 };
 use app_core::{AppConfig, SongsStore};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -22,12 +23,12 @@ use config::{load_config, save_config};
 use lyrics::{apply_timed_lyrics, load_lyrics, provide_lrc, save_lyrics, search_lrclib_lyrics};
 use microphones::{
     get_latest_mic_samples, get_mic_capture_status, get_vocal_recording_status, list_microphones,
-    pause_vocal_recording, resume_vocal_recording, set_monitor_gain, start_mic_capture,
-    start_vocal_recording, stop_mic_capture, stop_vocal_recording,
+    pause_vocal_recording, resume_vocal_recording, set_monitor_enabled, set_monitor_gain,
+    start_mic_capture, start_vocal_recording, stop_mic_capture, stop_vocal_recording,
 };
 use playback::{
     ensure_mp3_stems, ensure_playable_source_video, fetch_pixabay_videos, get_audio_paths,
-    load_melody_map, load_transcript, rebuild_melody_map, save_melody_map,
+    load_melody_map, load_transcript, rebuild_melody_map, save_melody_map, verify_melody_map,
 };
 use practice::{
     export_recording, list_practice_sessions, load_recording_take, save_practice_session,
@@ -132,6 +133,7 @@ pub fn run() {
             enqueue_one,
             enqueue_all,
             delete_song_cache,
+            remove_song,
             reanalyze_transcript,
             reanalyze_full,
             realign,
@@ -148,6 +150,7 @@ pub fn run() {
             load_transcript,
             load_melody_map,
             rebuild_melody_map,
+            verify_melody_map,
             save_melody_map,
             get_audio_paths,
             ensure_mp3_stems,
@@ -158,6 +161,7 @@ pub fn run() {
             get_mic_capture_status,
             get_latest_mic_samples,
             get_vocal_recording_status,
+            set_monitor_enabled,
             start_mic_capture,
             stop_mic_capture,
             start_vocal_recording,

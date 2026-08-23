@@ -48,9 +48,9 @@ pub use queries::{
 };
 pub use rebase::{rebase_song_album_art_cache_paths, rebase_song_album_art_paths};
 pub use songs::{
-    append_songs_for_scan, delete_songs_not_in_paths, load_all_songs, load_song_by_hash,
-    load_song_path_strings, read_library_meta, rekey_song, replace_all_songs_sorted,
-    update_library_meta, update_song_fields,
+    append_songs_for_scan, delete_songs_not_in_paths, hide_and_delete_song, load_all_songs,
+    load_song_by_hash, load_song_by_hash_and_path, load_song_path_strings, read_library_meta,
+    rekey_song, replace_all_songs_sorted, update_library_meta, update_song_fields,
 };
 
 /// Incremented at the start of each `start_scan` so in-flight scan threads stop writing

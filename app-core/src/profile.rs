@@ -10,6 +10,12 @@ pub struct ScoreRecord {
     pub song_hash: String,
     pub score: u32,
     pub played_at: u64,
+    #[serde(default = "default_scoring_difficulty")]
+    pub difficulty: String,
+}
+
+fn default_scoring_difficulty() -> String {
+    "medium".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -112,7 +118,7 @@ impl ProfileStore {
         self.save();
     }
 
-    pub fn add_score(&mut self, song_hash: &str, score: u32) {
+    pub fn add_score(&mut self, song_hash: &str, score: u32, difficulty: &str) {
         let profile = match &self.active {
             Some(p) => p.clone(),
             None => return,
@@ -126,6 +132,10 @@ impl ProfileStore {
             song_hash: song_hash.to_string(),
             score,
             played_at,
+            difficulty: match difficulty {
+                "easy" | "pro" => difficulty.to_string(),
+                _ => default_scoring_difficulty(),
+            },
         });
         self.save();
     }
@@ -160,7 +170,17 @@ impl ProfileStore {
 
 #[cfg(test)]
 mod tests {
-    use super::ProfileStore;
+    use super::{ProfileStore, ScoreRecord};
+
+    #[test]
+    fn legacy_scores_default_to_medium_difficulty() {
+        let record: ScoreRecord = serde_json::from_str(
+            r#"{"profile":"Guest","song_hash":"song","score":800,"played_at":1}"#,
+        )
+        .expect("legacy score should deserialize");
+
+        assert_eq!(record.difficulty, "medium");
+    }
 
     #[test]
     fn default_profile_is_ready_for_scores_and_recordings() {

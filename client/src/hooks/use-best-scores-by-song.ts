@@ -1,10 +1,14 @@
 import { useProfiles } from "@/queries/use-profiles";
+import { useConfig } from "@/queries/use-config";
+import { scoringDifficulty } from "@/lib/pitch/difficulty";
 import { useMemo } from "react";
 
 export function useBestScoresBySongForActiveProfile(): Map<string, number> {
   const { data } = useProfiles();
+  const { data: config } = useConfig();
   const active = data?.active;
   const scores = data?.scores ?? [];
+  const difficulty = scoringDifficulty(config?.scoring_difficulty);
 
   return useMemo(() => {
     const map = new Map<string, number>();
@@ -13,7 +17,7 @@ export function useBestScoresBySongForActiveProfile(): Map<string, number> {
     }
 
     for (const r of scores) {
-      if (r.profile !== active) {
+      if (r.profile !== active || scoringDifficulty(r.difficulty) !== difficulty) {
         continue;
       }
 
@@ -24,5 +28,5 @@ export function useBestScoresBySongForActiveProfile(): Map<string, number> {
     }
 
     return map;
-  }, [scores, active]);
+  }, [scores, active, difficulty]);
 }

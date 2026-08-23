@@ -72,6 +72,7 @@ export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSi
           status={status}
           analysisBusy={analysisBusy}
           supportsAnalysisActions={supportsAnalysisActions}
+          onSongRemoved={closeDetails}
         />
       </div>
 

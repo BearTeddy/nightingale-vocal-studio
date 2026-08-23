@@ -12,11 +12,17 @@ import { useMicReactive, type MicReactiveRef } from "@/hooks/use-mic-reactive";
 import { usePitchScoring } from "@/hooks/use-pitch-scoring";
 import { usePlaybackConfigPersist } from "@/hooks/playback/use-playback-config-persist";
 import { DEFAULT_MIC_LATENCY_COMPENSATION_SEC } from "@/lib/pitch/constants";
+import {
+  scoringDifficulty,
+  scoringDifficultyProfile,
+  type ScoringDifficulty,
+} from "@/lib/pitch/difficulty";
 import type { PitchSeries } from "@/lib/pitch/state";
 import { transformMelodyMap } from "@/lib/pitch/melody";
 import { planRecordingAttachment } from "@/lib/recording-sync";
 import { shouldAutoExportRecording } from "@/lib/recording-recovery";
 import { loadMelodyMap } from "@/bridge/playback";
+import { updateMicMonitorEnabled } from "@/bridge/microphone";
 import {
   exportRecording,
   getVocalRecordingStatus,
@@ -28,6 +34,7 @@ import {
 } from "@/bridge/recording";
 import type { AppConfig } from "@/types/AppConfig";
 import type { MelodyMap } from "@/types/MelodyMap";
+import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { PerformanceScore } from "@/types/PerformanceScore";
 import type { PitchFrame } from "@/types/PitchFrame";
 import type { RecordingTake } from "@/types/RecordingTake";
@@ -59,6 +66,7 @@ export interface PlaybackMicState {
   rawScore: number;
   series: PitchSeries;
   micCaptureActive: boolean;
+  micCaptureStatus: MicCaptureStatus | null;
   micPitchActive: boolean;
   micReady: boolean;
   latestFrame: PitchFrame | null;
@@ -80,6 +88,7 @@ export interface PlaybackMicState {
   vocalGain: number;
   videoExportAvailable: boolean;
   feedbackMode: "coach" | "game";
+  scoringDifficulty: ScoringDifficulty;
 }
 
 export interface PlaybackMicActions {
@@ -93,6 +102,7 @@ export interface PlaybackMicActions {
   retryRecordingExport: () => void;
   exportRecordingVideo: () => void;
   setFeedbackMode: (mode: "coach" | "game") => void;
+  setScoringDifficulty: (difficulty: ScoringDifficulty) => void;
 }
 
 const MicStateContext = createContext<PlaybackMicState | null>(null);
@@ -132,13 +142,16 @@ export function PlaybackMicProvider({
   const [selectedMicId, setSelectedMicId] = useState<string | null>(config?.preferred_mic ?? null);
   const [melody, setMelody] = useState<MelodyMap | null>(null);
   const { data: profiles } = useProfiles();
-  const [recordingWanted, setRecordingWanted] = useState(true);
+  const [recordingWanted, setRecordingWanted] = useState(false);
   const [recordingStatus, setRecordingStatus] =
     useState<PlaybackMicState["recordingStatus"]>("off");
   const [recordingTake, setRecordingTake] = useState<RecordingTake | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [vocalGain, setVocalGainState] = useState(1);
   const [feedbackMode, setFeedbackMode] = useState<"coach" | "game">("coach");
+  const [selectedScoringDifficulty, setSelectedScoringDifficulty] = useState<ScoringDifficulty>(
+    () => scoringDifficulty(config?.scoring_difficulty),
+  );
   const [performanceSeries, setPerformanceSeries] = useState<PitchSeries>({
     refPitches: [],
     userPitches: [],
@@ -190,13 +203,19 @@ export function PlaybackMicProvider({
   const captureEnabled =
     micUserEnabled && (recordingWanted || micPitchEnabled || micMonitorEnabled);
 
-  const captureOptions = useMemo(() => ({ emit_audio: micMonitorEnabled }), [micMonitorEnabled]);
-
-  const { active: micCaptureActive, error: micCaptureError } = useMicCapture(
-    selectedMicId,
-    captureEnabled,
-    captureOptions,
+  const captureOptions = useMemo(
+    () => ({
+      emit_audio: micMonitorEnabled,
+      monitor_mode: config?.mic_monitor_mode ?? "low_latency",
+    }),
+    [config?.mic_monitor_mode, micMonitorEnabled],
   );
+
+  const {
+    active: micCaptureActive,
+    error: micCaptureError,
+    status: micCaptureStatus,
+  } = useMicCapture(selectedMicId, captureEnabled, captureOptions);
   const {
     latestFrame,
     active: micPitchActive,
@@ -204,11 +223,20 @@ export function PlaybackMicProvider({
   } = useMicPitch(micPitchEnabled);
   const reactiveRef = useMicReactive(micPitchEnabled);
 
+  useEffect(() => {
+    void updateMicMonitorEnabled(micMonitorEnabled).catch((error) => {
+      if (!micMonitorEnabled) return;
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`Mic monitor: ${message}`);
+    });
+  }, [micMonitorEnabled]);
+
   const { series, score, performance, getPerformanceSeries } = usePitchScoring(
     { isReady, duration, getReferenceBuffer: getVocalsBuffer, subscribe },
     latestFrame,
     melody,
     config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+    selectedScoringDifficulty,
   );
   performanceRef.current = performance;
   getPerformanceSeriesRef.current = getPerformanceSeries;
@@ -586,9 +614,24 @@ export function PlaybackMicProvider({
         setMicUserEnabled(true);
         persistConfig({ mic_active: true });
       }
+      if (next) {
+        toast.info("Mic monitor on — wired headphones recommended");
+      }
       return next;
     });
   }, [persistConfig, micUserEnabled]);
+
+  const changeScoringDifficulty = useCallback(
+    (difficulty: ScoringDifficulty) => {
+      if (selectedScoringDifficulty === difficulty) return;
+      setSelectedScoringDifficulty(difficulty);
+      persistConfig({ scoring_difficulty: difficulty });
+      toast.success(
+        `${scoringDifficultyProfile(difficulty).label} scoring selected — score and combo restarted`,
+      );
+    },
+    [persistConfig, selectedScoringDifficulty],
+  );
 
   const handleToggleRecording = useCallback(() => {
     setRecordingWanted((current) => {
@@ -713,6 +756,7 @@ export function PlaybackMicProvider({
       rawScore: strictScoringAvailable ? score : 0,
       series,
       micCaptureActive,
+      micCaptureStatus,
       micPitchActive,
       micReady,
       latestFrame,
@@ -726,6 +770,7 @@ export function PlaybackMicProvider({
       vocalGain,
       videoExportAvailable: videoPath != null,
       feedbackMode,
+      scoringDifficulty: selectedScoringDifficulty,
     };
   }, [
     micUserEnabled,
@@ -734,6 +779,7 @@ export function PlaybackMicProvider({
     score,
     series,
     micCaptureActive,
+    micCaptureStatus,
     micPitchActive,
     latestFrame,
     melody,
@@ -746,6 +792,7 @@ export function PlaybackMicProvider({
     vocalGain,
     videoPath,
     feedbackMode,
+    selectedScoringDifficulty,
   ]);
 
   const actionsValue = useMemo<PlaybackMicActions>(
@@ -760,6 +807,7 @@ export function PlaybackMicProvider({
       retryRecordingExport,
       exportRecordingVideo,
       setFeedbackMode,
+      setScoringDifficulty: changeScoringDifficulty,
     }),
     [
       reactiveRef,
@@ -772,6 +820,7 @@ export function PlaybackMicProvider({
       retryRecordingExport,
       exportRecordingVideo,
       setFeedbackMode,
+      changeScoringDifficulty,
     ],
   );
 

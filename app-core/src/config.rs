@@ -189,7 +189,9 @@ pub struct AppConfig {
     pub mic_monitoring: Option<bool>,
     #[serde(alias = "mic_mirror_gain")]
     pub mic_monitor_gain: Option<f64>,
+    pub mic_monitor_mode: Option<String>,
     pub mic_latency_compensation_sec: Option<f64>,
+    pub scoring_difficulty: Option<String>,
     pub preferred_mic: Option<String>,
     pub whisper_model: Option<String>,
     pub beam_size: Option<u32>,
@@ -202,6 +204,7 @@ pub struct AppConfig {
     pub align_backend: Option<String>,
     pub vocal_detection_threshold_pct: Option<f64>,
     pub auto_analyze: Option<bool>,
+    pub verify_melody_analysis: Option<bool>,
     pub song_list_view: Option<String>,
     pub language_overrides: Option<HashMap<String, String>>,
 }
@@ -224,7 +227,9 @@ impl Default for AppConfig {
             mic_active: None,
             mic_monitoring: None,
             mic_monitor_gain: None,
+            mic_monitor_mode: None,
             mic_latency_compensation_sec: None,
+            scoring_difficulty: None,
             preferred_mic: None,
             whisper_model: None,
             beam_size: None,
@@ -237,6 +242,7 @@ impl Default for AppConfig {
             align_backend: None,
             vocal_detection_threshold_pct: None,
             auto_analyze: None,
+            verify_melody_analysis: None,
             song_list_view: None,
             language_overrides: None,
         }
@@ -396,11 +402,22 @@ impl AppConfig {
         self.auto_analyze.unwrap_or(false)
     }
 
+    pub fn verify_melody_analysis(&self) -> bool {
+        self.verify_melody_analysis.unwrap_or(false)
+    }
+
     pub fn mic_monitor_gain(&self) -> f32 {
         self.mic_monitor_gain
             .map(|v| v as f32)
             .unwrap_or(0.65)
             .clamp(0.0, 2.0)
+    }
+
+    pub fn mic_monitor_mode(&self) -> &str {
+        match self.mic_monitor_mode.as_deref() {
+            Some("compatible") => "compatible",
+            _ => "low_latency",
+        }
     }
 
     pub fn mic_latency_compensation_sec(&self) -> f32 {

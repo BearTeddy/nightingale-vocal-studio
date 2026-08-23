@@ -686,6 +686,7 @@ fn process_song(initial_hash: &str, cache: &CacheDir) {
         "engine": config.asr_engine(),
         "align_backend": config.align_backend(),
         "vocal_detection_threshold_pct": config.vocal_detection_threshold_pct(),
+        "verify_melody": config.verify_melody_analysis(),
     });
 
     if stems_only {
@@ -873,6 +874,7 @@ fn run_key_pass(
         "engine": config.asr_engine(),
         "align_backend": config.align_backend(),
         "vocal_detection_threshold_pct": config.vocal_detection_threshold_pct(),
+        "verify_melody": config.verify_melody_analysis(),
         // Key only: keep the provided LRC transcript and the original mix.
         "skip_transcription": true,
         "skip_separation": true,

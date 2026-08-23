@@ -76,8 +76,21 @@ pub fn save_melody_map(file_hash: &str, mut melody: MelodyMap) -> Result<(), Str
 }
 
 pub fn rebuild_melody_map(file_hash: &str) -> Result<MelodyMap, String> {
+    rebuild_melody_map_internal(file_hash, false)
+}
+
+pub fn verify_melody_map(file_hash: &str) -> Result<MelodyMap, String> {
+    rebuild_melody_map_internal(file_hash, true)
+}
+
+fn rebuild_melody_map_internal(file_hash: &str, verify: bool) -> Result<MelodyMap, String> {
     let cache = CacheDir::new();
     if let Some(map) = melody_from_usdx_transcript(&cache, file_hash) {
+        if verify {
+            return Err(
+                "USDX pitch guides already use authored notes and do not need verification".into(),
+            );
+        }
         save_melody_map(file_hash, map.clone())?;
         return Ok(map);
     }
@@ -89,11 +102,16 @@ pub fn rebuild_melody_map(file_hash: &str) -> Result<MelodyMap, String> {
     let vocals = canonical_vocals_path(&cache, file_hash)
         .ok_or_else(|| "The isolated vocal stem is missing; run full analysis first".to_string())?;
     let output = cache.melody_path(file_hash);
-    let result = silent_command(python_path())
+    let mut command = silent_command(python_path());
+    command
         .arg(analyzer_dir().join("melody.py"))
         .arg(&vocals)
         .arg(&output)
-        .arg(&transcript)
+        .arg(&transcript);
+    if verify {
+        command.arg("--verify");
+    }
+    let result = command
         .output()
         .map_err(|error| format!("Could not start pitch-guide analysis: {error}"))?;
     if !result.status.success() {

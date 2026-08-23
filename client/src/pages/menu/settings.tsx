@@ -17,6 +17,7 @@ import {
   DEFAULTS,
   LYRICS_HORIZONTAL_POSITIONS,
   LYRICS_VERTICAL_POSITIONS,
+  MIC_MONITOR_MODES,
   MODELS,
   NAV,
   SEPARATORS,
@@ -216,6 +217,22 @@ export const SettingsPage = () => {
                 />
               </Field>
 
+              <Field>
+                <Label>Mic monitor latency</Label>
+                <Hint>
+                  Low latency is tuned for wired headphones. Choose Compatible only if you hear
+                  crackling or dropouts.
+                </Hint>
+                <SettingsSelect
+                  label="Mic monitor latency"
+                  placeholder="Low latency"
+                  value={config?.mic_monitor_mode ?? DEFAULTS.mic_monitor_mode}
+                  options={MIC_MONITOR_MODES}
+                  triggerClassName={getFocusClassName(NAV.general.micMonitorMode)}
+                  onValueChange={(value) => mutate({ mic_monitor_mode: value })}
+                />
+              </Field>
+
               <MicLatencyField
                 selectedMicId={config?.preferred_mic ?? null}
                 latencySec={micLatencySec}
@@ -355,6 +372,30 @@ export const SettingsPage = () => {
                     className={getFocusClassName(analysisNav.autoAnalyze, 1)}
                   >
                     On
+                  </Button>
+                </ButtonGroup>
+              </Field>
+
+              <Field>
+                <Label>Deep pitch verification</Label>
+                <Hint>
+                  Cross-check target notes against the isolated vocal with two independent pitch
+                  detectors. This rejects octave spikes but makes analysis substantially slower.
+                </Hint>
+                <ButtonGroup>
+                  <Button
+                    variant={config?.verify_melody_analysis === true ? "outline" : "default"}
+                    onClick={() => mutate({ verify_melody_analysis: false })}
+                    className={getFocusClassName(analysisNav.verifyMelody, 0)}
+                  >
+                    Off
+                  </Button>
+                  <Button
+                    variant={config?.verify_melody_analysis === true ? "default" : "outline"}
+                    onClick={() => mutate({ verify_melody_analysis: true })}
+                    className={getFocusClassName(analysisNav.verifyMelody, 1)}
+                  >
+                    On (slower)
                   </Button>
                 </ButtonGroup>
               </Field>

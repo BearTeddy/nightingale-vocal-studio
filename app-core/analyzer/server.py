@@ -51,6 +51,7 @@ def process_song(cmd, device):
     language_override = cmd.get("language")
     skip_transcription = bool(cmd.get("skip_transcription", False))
     skip_separation = bool(cmd.get("skip_separation", False))
+    verify_melody = bool(cmd.get("verify_melody", False))
 
     set_align_backend(cmd.get("align_backend", "whisperx"))
     set_vocal_threshold_pct(cmd.get("vocal_detection_threshold_pct"))
@@ -72,6 +73,7 @@ def process_song(cmd, device):
             free_gpu_fn=hard_free_gpu,
             skip_transcription=skip_transcription,
             skip_separation=skip_separation,
+            verify_melody=verify_melody,
         )
     finally:
         end_of_song_cleanup()

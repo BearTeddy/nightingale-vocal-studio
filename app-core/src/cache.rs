@@ -123,7 +123,8 @@ impl CacheDir {
         self.stems_exist(hash) || transcript_marks_no_stems(&transcript)
     }
 
-    pub fn delete_song_cache(&self, hash: &str) {
+    pub fn delete_song_cache(&self, hash: &str) -> u64 {
+        let mut freed_bytes = 0;
         for path in [
             self.transcript_path(hash),
             self.melody_path(hash),
@@ -134,9 +135,7 @@ impl CacheDir {
             self.lyrics_path(hash),
             self.playable_video_path(hash),
         ] {
-            if path.is_file() {
-                let _ = std::fs::remove_file(&path);
-            }
+            freed_bytes += remove_file_and_size(&path);
         }
 
         if let Ok(entries) = std::fs::read_dir(&self.path) {
@@ -149,10 +148,11 @@ impl CacheDir {
                     || name.starts_with(&format!("{hash}_vocals_"))
                     || is_variant_transcript_file(name, hash)
                 {
-                    let _ = std::fs::remove_file(&path);
+                    freed_bytes += remove_file_and_size(&path);
                 }
             }
         }
+        freed_bytes
     }
 
     pub fn delete_transcript_variants(&self, hash: &str) {
@@ -174,6 +174,20 @@ impl CacheDir {
             let _ = std::fs::remove_dir_all(&self.path);
             let _ = std::fs::create_dir_all(&self.path);
         }
+    }
+}
+
+pub(crate) fn remove_file_and_size(path: &Path) -> u64 {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !metadata.file_type().is_file() && !metadata.file_type().is_symlink() {
+        return 0;
+    }
+    if std::fs::remove_file(path).is_ok() {
+        metadata.len()
+    } else {
+        0
     }
 }
 

@@ -20,6 +20,7 @@ import {
   sampleVocalsWindow,
 } from "@/lib/pitch/state";
 import type { MelodyMap } from "@/types/MelodyMap";
+import type { ScoringDifficulty } from "@/lib/pitch/difficulty";
 import type { PerformanceScore } from "@/types/PerformanceScore";
 import type { PitchFrame } from "@/types/PitchFrame";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -36,6 +37,7 @@ export function usePitchScoring(
   micFrame: PitchFrame | null,
   melody: MelodyMap | null,
   latencyCompensationSec = DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+  difficulty: ScoringDifficulty = "medium",
 ) {
   const bufferRef = useRef(new PitchStateBuffer());
   const melodyScoringRef = useRef<MelodyPerformanceScoring | null>(null);
@@ -67,7 +69,9 @@ export function usePitchScoring(
     timestamps: [],
   });
   const [score, setScore] = useState(0);
-  const [performance, setPerformance] = useState<PerformanceScore>(() => emptyPerformance());
+  const [performance, setPerformance] = useState<PerformanceScore>(() =>
+    emptyPerformance(difficulty),
+  );
 
   micFrameRef.current = micFrame;
   melodyRef.current = melody;
@@ -99,13 +103,13 @@ export function usePitchScoring(
     };
 
     melodyScoringRef.current = melody?.strict_scoring_available
-      ? new MelodyPerformanceScoring(melody)
+      ? new MelodyPerformanceScoring(melody, difficulty)
       : null;
 
     setSeries(bufferRef.current.snapshot());
     setScore(0);
-    setPerformance(emptyPerformance());
-  }, [isReady, duration, melody]);
+    setPerformance(emptyPerformance(difficulty));
+  }, [difficulty, duration, isReady, melody]);
 
   useEffect(() => {
     if (!isReady) {
@@ -137,7 +141,7 @@ export function usePitchScoring(
       if (melodyScoring && melodyRef.current) {
         const note = findTargetNoteAt(melodyRef.current.notes, scoringTime);
         const refHz = note ? midiToFreq(note.midi + note.cents / 100) : null;
-        const sim = refHz != null && mp != null ? pitchSimilarity(refHz, mp) : 0;
+        const sim = refHz != null && mp != null ? pitchSimilarity(refHz, mp, difficulty) : 0;
         bufferRef.current.tryPush(refHz, mp, sim, t, frame?.sample_index);
         if (shouldProcessFrame) {
           const referenceBuffer = getReferenceBuffer();
@@ -216,15 +220,16 @@ export function usePitchScoring(
     };
 
     return subscribe(run);
-  }, [getReferenceBuffer, isReady, subscribe]);
+  }, [difficulty, getReferenceBuffer, isReady, subscribe]);
 
   const getPerformanceSeries = useCallback((): PitchSeries => denseSeriesRef.current, []);
 
   return { series, score, performance, getPerformanceSeries };
 }
 
-function emptyPerformance(): PerformanceScore {
+function emptyPerformance(difficulty: ScoringDifficulty): PerformanceScore {
   return {
+    scoring_difficulty: difficulty,
     overall: 0,
     legacy_score: 0,
     phrase_accuracy: 0,

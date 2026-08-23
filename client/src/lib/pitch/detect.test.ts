@@ -5,9 +5,10 @@ import { createMicPitchDetector, detectMicPitchDetails } from "./detect";
 
 const SAMPLE_RATE = 48_000;
 
-function sineWave(hz: number): Float32Array {
-  return Float32Array.from({ length: PITCH_WINDOW_SAMPLES }, (_, index) =>
-    Math.sin((Math.PI * 2 * hz * index) / SAMPLE_RATE),
+function sineWave(hz: number, amplitude = 0.2): Float32Array {
+  return Float32Array.from(
+    { length: PITCH_WINDOW_SAMPLES },
+    (_, index) => amplitude * Math.sin((Math.PI * 2 * hz * index) / SAMPLE_RATE),
   );
 }
 
@@ -26,5 +27,12 @@ describe("browser microphone pitch fallback", () => {
 
     expect(frame.hz).toBeNull();
     expect(frame.clarity).toBeCloseTo(MIC_PITCH_CLARITY_THRESHOLD - 0.01);
+  });
+
+  it("rejects clipped periodic input instead of reporting a false high note", () => {
+    const frame = detectMicPitchDetails(createMicPitchDetector(), sineWave(440, 1), SAMPLE_RATE);
+
+    expect(frame.peak).toBeGreaterThanOrEqual(0.985);
+    expect(frame.hz).toBeNull();
   });
 });

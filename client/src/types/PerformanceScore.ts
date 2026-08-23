@@ -1,3 +1,5 @@
+import type { ScoringDifficulty } from "@/lib/pitch/difficulty";
+
 export type CategoryScore = {
   key: "pitch" | "timing" | "stability" | "sustain" | "dynamics" | "technique";
   label: string;
@@ -13,6 +15,7 @@ export type PhraseScore = {
 };
 
 export type PerformanceScore = {
+  scoring_difficulty: ScoringDifficulty;
   overall: number;
   legacy_score: number;
   phrase_accuracy: number;

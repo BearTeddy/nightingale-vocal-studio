@@ -19,6 +19,9 @@ export const saveMelodyMap = async (fileHash: string, melody: MelodyMap): Promis
 export const rebuildMelodyMap = async (fileHash: string): Promise<MelodyMap> =>
   await invoke<MelodyMap>("rebuild_melody_map", { fileHash });
 
+export const verifyMelodyMap = async (fileHash: string): Promise<MelodyMap> =>
+  await invoke<MelodyMap>("verify_melody_map", { fileHash });
+
 export const getAudioPaths = async (fileHash: string): Promise<AudioPaths> => {
   return await invoke<AudioPaths>("get_audio_paths", { fileHash });
 };

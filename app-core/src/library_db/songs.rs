@@ -8,7 +8,7 @@
 
 use rusqlite::params;
 
-use crate::song::{Song, TranscriptSource};
+use crate::song::{Song, SongOrigin, TranscriptSource};
 
 use super::connection::{with_conn, with_conn_mut};
 use super::scan_generation_is_current;
@@ -81,9 +81,15 @@ pub fn read_library_meta() -> rusqlite::Result<(String, usize)> {
 
 pub fn update_library_meta(folder: &str, scan_count: usize) -> rusqlite::Result<()> {
     with_conn_mut(|c| {
+        let hidden_count: i64 = c.query_row(
+            "SELECT COUNT(*) FROM hidden_songs WHERE source_label = ?1",
+            [folder],
+            |row| row.get(0),
+        )?;
+        let visible_count = scan_count.saturating_sub(hidden_count as usize);
         c.execute(
             "UPDATE library_meta SET folder = ?1, scan_count = ?2 WHERE id = 1",
-            params![folder, scan_count as i64],
+            params![folder, visible_count as i64],
         )?;
         Ok(())
     })
@@ -121,11 +127,24 @@ pub fn append_songs_for_scan(songs: &[Song], generation: u64) -> rusqlite::Resul
     }
     with_conn_mut(|c| {
         let tx = c.transaction()?;
+        let source_label: String =
+            tx.query_row("SELECT folder FROM library_meta WHERE id = 1", [], |row| {
+                row.get(0)
+            })?;
+        let hidden_keys = {
+            let mut stmt =
+                tx.prepare("SELECT source_key FROM hidden_songs WHERE source_label = ?1")?;
+            let rows = stmt.query_map([&source_label], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<std::collections::HashSet<_>, _>>()?
+        };
         {
             let mut stmt = tx.prepare(INSERT_SONG_SQL)?;
             for song in songs {
                 if !scan_generation_is_current(generation) {
                     return Ok(());
+                }
+                if hidden_keys.contains(&song_source_key(song)) {
+                    continue;
                 }
                 insert_song_row_prepared(&mut stmt, song)?;
             }
@@ -135,6 +154,68 @@ pub fn append_songs_for_scan(songs: &[Song], generation: u64) -> rusqlite::Resul
         }
         tx.commit()?;
         Ok(())
+    })
+}
+
+/// Stable identity used to keep a deliberately removed song hidden across scans.
+/// Local songs are keyed by their library path; remote catalogues have stable item ids.
+pub fn song_source_key(song: &Song) -> String {
+    match &song.origin {
+        SongOrigin::LocalFile => format!("local:{}", song.path.to_string_lossy()),
+        SongOrigin::Jellyfin { item_id, .. } => format!("jellyfin:{item_id}"),
+        SongOrigin::Navidrome { item_id, .. } => format!("navidrome:{item_id}"),
+        SongOrigin::Plex { item_id, .. } => format!("plex:{item_id}"),
+    }
+}
+
+pub fn load_song_by_hash_and_path(file_hash: &str, path: &str) -> rusqlite::Result<Option<Song>> {
+    use rusqlite::OptionalExtension;
+    with_conn(|c| {
+        c.query_row(
+            "SELECT payload FROM songs WHERE file_hash = ?1 AND path = ?2 LIMIT 1",
+            params![file_hash, path],
+            load_song_from_payload_column,
+        )
+        .optional()
+    })
+}
+
+/// Hide a song from future scans and remove its catalogue/queue rows atomically.
+/// Returns whether any other catalogue row still shares the same content hash.
+pub fn hide_and_delete_song(song: &Song) -> rusqlite::Result<bool> {
+    let source_key = song_source_key(song);
+    let path = song.path.to_string_lossy().into_owned();
+    with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        let source_label: String =
+            tx.query_row("SELECT folder FROM library_meta WHERE id = 1", [], |row| {
+                row.get(0)
+            })?;
+        tx.execute(
+            "INSERT OR IGNORE INTO hidden_songs (source_label, source_key) VALUES (?1, ?2)",
+            params![source_label, source_key],
+        )?;
+        tx.execute(
+            "DELETE FROM analysis_queue WHERE file_hash = ?1",
+            params![song.file_hash],
+        )?;
+        tx.execute(
+            "DELETE FROM songs WHERE file_hash = ?1 AND path = ?2",
+            params![song.file_hash, path],
+        )?;
+        tx.execute(
+            "UPDATE library_meta
+             SET scan_count = CASE WHEN scan_count > 0 THEN scan_count - 1 ELSE 0 END
+             WHERE id = 1",
+            [],
+        )?;
+        let remaining: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM songs WHERE file_hash = ?1",
+            params![song.file_hash],
+            |row| row.get(0),
+        )?;
+        tx.commit()?;
+        Ok(remaining > 0)
     })
 }
 

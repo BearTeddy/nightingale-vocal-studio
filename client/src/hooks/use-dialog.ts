@@ -17,6 +17,7 @@ export type DialogMode =
   | { mode: "language"; song: Song }
   | { mode: "edit-lyrics"; song: Song }
   | { mode: "edit-melody"; song: Song }
+  | { mode: "remove-song"; song: Song; onRemoved?: () => void }
   | { mode: "clear-cache"; target: ClearCacheTarget }
   | null;
 

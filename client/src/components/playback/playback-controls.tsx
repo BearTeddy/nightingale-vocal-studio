@@ -286,17 +286,19 @@ export function PlaybackControls({ title, artist, config }: PlaybackControlsProp
       onPointerLeave={scheduleHide}
     >
       {isTauri && !fullscreen && visible && (
-        <button
-          type="button"
-          className="pointer-events-auto absolute bottom-full left-1/2 flex h-7 w-16 -translate-x-1/2 items-center justify-center rounded-t-md border border-b-0 border-white/15 bg-black/80 text-white/65 backdrop-blur-md transition-colors hover:text-white"
+        <div
+          data-tauri-drag-region
+          className="pointer-events-auto absolute bottom-full left-1/2 flex h-8 w-24 -translate-x-1/2 cursor-grab touch-none select-none items-center justify-center rounded-t-md border border-b-0 border-white/15 bg-black/80 text-white/65 backdrop-blur-md transition-colors hover:text-white active:cursor-grabbing"
           aria-label="Drag playback window"
           title="Drag playback window"
-          onPointerDown={(event) => {
-            if (event.button === 0) void startWindowDragging();
+          onMouseDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            void startWindowDragging();
           }}
         >
-          <GripHorizontal className="size-4" />
-        </button>
+          <GripHorizontal data-tauri-drag-region className="pointer-events-none size-5" />
+        </div>
       )}
 
       <div className="border-t border-white/15 bg-black/85 shadow-[0_-8px_30px_rgba(0,0,0,0.25)] backdrop-blur-md">

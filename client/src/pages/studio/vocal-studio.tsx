@@ -582,7 +582,7 @@ export function VocalStudioPage() {
   const capture = useMicCapture(
     config?.preferred_mic ?? null,
     true,
-    { emit_audio: false },
+    { emit_audio: false, monitor_mode: null },
     microphoneAdapter,
   );
   const { latestFrame, active: pitchActive } = useMicPitch(capture.active);

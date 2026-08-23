@@ -75,7 +75,7 @@ export async function measureMicLatencySec(
   const context = await createUnlockedAudioContext();
 
   try {
-    await adapter.startCapture(deviceId, { emit_audio: false });
+    await adapter.startCapture(deviceId, { emit_audio: false, monitor_mode: null });
 
     return await new Promise<number>((resolve, reject) => {
       let done = false;

@@ -32,6 +32,7 @@ interface BuildActionGroupsParams {
   onEditLyrics: () => void;
   onEditMelody: () => void;
   onChangeLanguage: () => void;
+  onRemoveSong: () => void;
   run: (message: string, action: () => void | Promise<void>) => () => Promise<void>;
 }
 
@@ -44,6 +45,7 @@ export function buildActionGroups({
   onEditLyrics,
   onEditMelody,
   onChangeLanguage,
+  onRemoveSong,
   run,
 }: BuildActionGroupsParams): ActionItemProps[][] {
   const groups: ActionItemProps[][] = [];
@@ -168,6 +170,21 @@ export function buildActionGroups({
       },
     ]);
   }
+
+  groups.push([
+    {
+      icon: Trash2Icon,
+      title: "Remove song…",
+      description: analysisBusy
+        ? "Wait for analysis to finish before removing this song."
+        : song.origin.kind === "local_file"
+          ? "Keep the original file or permanently delete it to free more space."
+          : "Hide it from Nightingale and remove its downloaded files.",
+      disabled: analysisBusy,
+      destructive: true,
+      onClick: onRemoveSong,
+    },
+  ]);
 
   return groups;
 }

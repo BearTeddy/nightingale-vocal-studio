@@ -23,7 +23,9 @@ export type AppConfig = {
    */
   mic_monitoring: boolean | null;
   mic_monitor_gain: number | null;
+  mic_monitor_mode: string | null;
   mic_latency_compensation_sec: number | null;
+  scoring_difficulty: string | null;
   preferred_mic: string | null;
   whisper_model: string | null;
   beam_size: number | null;
@@ -36,6 +38,7 @@ export type AppConfig = {
   align_backend: string | null;
   vocal_detection_threshold_pct: number | null;
   auto_analyze: boolean | null;
+  verify_melody_analysis: boolean | null;
   song_list_view: string | null;
   language_overrides: { [key in string]: string } | null;
 };

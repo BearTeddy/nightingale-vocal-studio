@@ -13,6 +13,7 @@ interface ActionsSectionProps {
   status: SongStatusInfo;
   analysisBusy: boolean;
   supportsAnalysisActions: boolean;
+  onSongRemoved: () => void;
 }
 
 export const ActionsSection = ({
@@ -20,6 +21,7 @@ export const ActionsSection = ({
   status,
   analysisBusy,
   supportsAnalysisActions,
+  onSongRemoved,
 }: ActionsSectionProps) => {
   const { setMode } = useDialog();
   const analysis = useAnalysis();
@@ -38,6 +40,7 @@ export const ActionsSection = ({
     onEditLyrics: () => setMode({ mode: "edit-lyrics", song }),
     onEditMelody: () => setMode({ mode: "edit-melody", song }),
     onChangeLanguage: () => setMode({ mode: "language", song }),
+    onRemoveSong: () => setMode({ mode: "remove-song", song, onRemoved: onSongRemoved }),
     run,
   });
 

@@ -1,4 +1,10 @@
-import { loadMelodyMap, playbackAdapter, rebuildMelodyMap, saveMelodyMap } from "@/bridge/playback";
+import {
+  loadMelodyMap,
+  playbackAdapter,
+  rebuildMelodyMap,
+  saveMelodyMap,
+  verifyMelodyMap,
+} from "@/bridge/playback";
 import { addScore } from "@/bridge/profile";
 import { listPracticeSessions, savePracticeSession } from "@/bridge/recording";
 import { Button } from "@/components/ui/button";
@@ -34,6 +40,7 @@ import {
   Plus,
   Save,
   Scissors,
+  ShieldCheck,
   Undo2,
   Volume2,
 } from "lucide-react";
@@ -297,13 +304,19 @@ export function MelodyEditorDialog() {
     }
   };
 
-  const build = async () => {
+  const build = async (verify = false) => {
     if (!song || building) return;
     setBuilding(true);
     try {
-      const next = await rebuildMelodyMap(song.file_hash);
+      const next = verify
+        ? await verifyMelodyMap(song.file_hash)
+        : await rebuildMelodyMap(song.file_hash);
       setEditor({ melody: next, selected: 0, undo: [] });
-      toast.success(`Pitch guide built with ${next.notes.length} notes`);
+      toast.success(
+        verify
+          ? `Pitch guide deep-verified with ${next.notes.length} consensus notes`
+          : `Pitch guide built with ${next.notes.length} notes`,
+      );
     } catch (error) {
       toast.error(`Pitch guide: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -332,7 +345,7 @@ export function MelodyEditorDialog() {
             <p className="text-sm text-muted-foreground">
               No melody guide is available yet. Build one from the analyzed vocal stem.
             </p>
-            <Button type="button" className="mt-5" disabled={building} onClick={build}>
+            <Button type="button" className="mt-5" disabled={building} onClick={() => build()}>
               {building ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
@@ -340,10 +353,40 @@ export function MelodyEditorDialog() {
               )}
               {building ? "Building pitch guide" : "Build pitch guide"}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="ml-2 mt-5"
+              disabled={building || song?.no_stems === true || song?.transcript_source === "Usdx"}
+              onClick={() => build(true)}
+            >
+              {building ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="size-4" />
+              )}
+              Deep verify (slow)
+            </Button>
           </div>
         ) : (
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <div className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={building || song?.no_stems === true || song?.transcript_source === "Usdx"}
+                title="Recheck the isolated vocal with two independent pitch detectors"
+                onClick={() => build(true)}
+              >
+                {building ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <ShieldCheck className="size-4" />
+                )}
+                {building ? "Verifying…" : "Deep verify"}
+              </Button>
+              <span className="mx-2 h-6 w-px bg-border" />
               <Button
                 type="button"
                 size="icon"

@@ -122,6 +122,20 @@ describe("strict pitch scoring", () => {
     expect(centsSimilarity(-100)).toBe(0);
   });
 
+  it("makes Easy forgiving and Pro progressively stricter", () => {
+    expect(centsSimilarity(45, "easy")).toBe(1);
+    expect(centsSimilarity(45, "medium")).toBeLessThan(1);
+    expect(centsSimilarity(45, "pro")).toBeLessThan(centsSimilarity(45, "medium"));
+
+    const easy = new MelodyPerformanceScoring(melody(), "easy");
+    const medium = new MelodyPerformanceScoring(melody(), "medium");
+    const pro = new MelodyPerformanceScoring(melody(), "pro");
+    for (const scoring of [easy, medium, pro]) scoring.accumulate(0.2, frame(69.45));
+
+    expect(easy.snapshot().phrase_accuracy).toBeGreaterThan(medium.snapshot().phrase_accuracy);
+    expect(medium.snapshot().phrase_accuracy).toBeGreaterThan(pro.snapshot().phrase_accuracy);
+  });
+
   it("does not fold an octave error onto the target", () => {
     expect(pitchSimilarity(440, 880)).toBe(0);
 

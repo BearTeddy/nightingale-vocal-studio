@@ -11,11 +11,18 @@ import {
 import { usePlaybackConfigPersist } from "@/hooks/playback/use-playback-config-persist";
 import type { VideoFlavor } from "@/lib/playback/video-flavor";
 import type { AppConfig } from "@/types/AppConfig";
+import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
+import {
+  nextScoringDifficulty,
+  scoringDifficultyProfile,
+  type ScoringDifficulty,
+} from "@/lib/pitch/difficulty";
 import { forwardRef, memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { isPixabayTheme, themeName } from "./background";
 import {
   Circle,
   Gamepad2,
+  Gauge,
   GraduationCap,
   Headphones,
   ImageIcon,
@@ -24,6 +31,12 @@ import {
   Square,
   Volume2,
 } from "lucide-react";
+
+function difficultyButtonClass(difficulty: ScoringDifficulty): string {
+  if (difficulty === "easy") return "bg-emerald-400 text-black hover:bg-emerald-300";
+  if (difficulty === "pro") return "bg-fuchsia-400 text-black hover:bg-fuchsia-300";
+  return "bg-amber-300 text-black hover:bg-amber-200";
+}
 
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -97,6 +110,7 @@ function SettingsInfo({
   micUserEnabled,
   micName,
   micMonitorUserEnabled,
+  micCaptureStatus,
   themeIndex,
   videoFlavor,
 }: {
@@ -105,11 +119,19 @@ function SettingsInfo({
   micUserEnabled: boolean;
   micName: string;
   micMonitorUserEnabled: boolean;
+  micCaptureStatus: MicCaptureStatus | null;
   themeIndex: number;
   videoFlavor: VideoFlavor;
 }) {
   const guidePercent = Math.round(guideVolume * 100);
   const theme = themeName(themeIndex, videoFlavor);
+  const monitorLabel = !micMonitorUserEnabled
+    ? "Off"
+    : micCaptureStatus?.monitor_active
+      ? `On · ~${Math.max(1, Math.round(micCaptureStatus.monitor_estimated_latency_ms))} ms`
+      : micCaptureStatus?.monitor_available
+        ? "Starting"
+        : "Unavailable";
   return (
     <div className="flex max-w-[min(36rem,75vw)] flex-wrap justify-end gap-x-3 gap-y-1 text-xs text-white/60">
       {guideAvailable && (
@@ -127,11 +149,8 @@ function SettingsInfo({
         <Mic2 className="size-3.5 shrink-0" />
         <span className="max-w-44 truncate">{micUserEnabled ? micName : "Off"}</span>
       </span>
-      <span
-        className="flex items-center gap-1"
-        title={`Microphone monitoring ${micMonitorUserEnabled ? "on" : "off"}`}
-      >
-        <Headphones className="size-3.5" /> {micMonitorUserEnabled ? "On" : "Off"}
+      <span className="flex items-center gap-1" title={`Microphone monitoring ${monitorLabel}`}>
+        <Headphones className="size-3.5" /> {monitorLabel}
       </span>
       <span className="flex min-w-0 items-center gap-1" title={`Background ${theme}`}>
         <ImageIcon className="size-3.5 shrink-0" />
@@ -155,7 +174,8 @@ function TouchControls({
   const { setGuideVolume, handlePause } = usePlaybackTransportActions();
   const { phraseLoopEnabled } = usePlaybackTranscriptState();
   const { togglePhraseLoop } = usePlaybackTranscriptActions();
-  const { micUserEnabled, micName, micMonitorUserEnabled } = usePlaybackMicState();
+  const { micUserEnabled, micName, micMonitorUserEnabled, micCaptureStatus } =
+    usePlaybackMicState();
   const { handleToggleMic, handleCycleMic, handleToggleMicMonitor } = usePlaybackMicActions();
   const { themeIndex, videoFlavor } = usePlaybackThemeState();
   const { cycleTheme, cycleFlavor } = usePlaybackThemeActions();
@@ -185,6 +205,7 @@ function TouchControls({
           micUserEnabled={micUserEnabled}
           micName={micName}
           micMonitorUserEnabled={micMonitorUserEnabled}
+          micCaptureStatus={micCaptureStatus}
           themeIndex={themeIndex}
           videoFlavor={videoFlavor}
         />
@@ -319,14 +340,17 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
     micUserEnabled,
     micName,
     micMonitorUserEnabled,
+    micCaptureStatus,
     micReady,
     melody,
     performance,
     feedbackMode,
+    scoringDifficulty,
     recordingWanted,
     recordingStatus,
   } = usePlaybackMicState();
-  const { setFeedbackMode, handleToggleRecording } = usePlaybackMicActions();
+  const { setFeedbackMode, setScoringDifficulty, handleToggleMicMonitor, handleToggleRecording } =
+    usePlaybackMicActions();
 
   const lastSecondRef = useRef(-1);
   const timerRef = useRef<HTMLParagraphElement>(null);
@@ -335,6 +359,8 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
 
   const showPixabayCredit = isPixabayTheme(themeIndex);
   const hasTouch = useHasTouchInput();
+  const difficultyProfile = scoringDifficultyProfile(scoringDifficulty);
+  const nextDifficulty = nextScoringDifficulty(scoringDifficulty);
 
   // Updates the timer text and skip-button visibility via direct DOM mutation
   // (rAF subscriber), only triggering a text update when the displayed second changes.
@@ -407,6 +433,15 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
             </button>
             <button
               type="button"
+              title={`${difficultyProfile.label} scoring: ${difficultyProfile.description} Click for ${scoringDifficultyProfile(nextDifficulty).label}.`}
+              aria-label={`Scoring difficulty ${difficultyProfile.label}`}
+              onClick={() => setScoringDifficulty(nextDifficulty)}
+              className={`flex h-8 items-center gap-1 px-2 text-xs font-semibold transition-colors ${difficultyButtonClass(scoringDifficulty)}`}
+            >
+              <Gauge className="size-4" /> {difficultyProfile.label}
+            </button>
+            <button
+              type="button"
               title="Coach feedback"
               aria-pressed={feedbackMode === "coach"}
               onClick={() => setFeedbackMode("coach")}
@@ -426,6 +461,24 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
               }`}
             >
               <Gamepad2 className="size-4" /> Game
+            </button>
+            <button
+              type="button"
+              title={
+                micMonitorUserEnabled
+                  ? "Turn microphone monitoring off"
+                  : "Hear your voice with low latency (wired headphones recommended)"
+              }
+              aria-label="Microphone monitoring"
+              aria-pressed={micMonitorUserEnabled}
+              onClick={handleToggleMicMonitor}
+              className={`flex size-8 items-center justify-center transition-colors ${
+                micMonitorUserEnabled
+                  ? "bg-cyan-400 text-black hover:bg-cyan-300"
+                  : "text-white/75 hover:bg-white/10"
+              }`}
+            >
+              <Headphones className="size-4" />
             </button>
             <button
               type="button"
@@ -458,6 +511,7 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
               micUserEnabled={micUserEnabled}
               micName={micName}
               micMonitorUserEnabled={micMonitorUserEnabled}
+              micCaptureStatus={micCaptureStatus}
               themeIndex={themeIndex}
               videoFlavor={videoFlavor}
             />

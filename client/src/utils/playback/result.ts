@@ -1,6 +1,7 @@
 import type { MelodyMap } from "@/types/MelodyMap";
 import type { PerformanceScore } from "@/types/PerformanceScore";
 import type { ScoreRecord } from "@/types/ScoreRecord";
+import { scoringDifficulty, type ScoringDifficulty } from "@/lib/pitch/difficulty";
 
 export interface PersonalBestComparison {
   currentScore: number;
@@ -9,10 +10,7 @@ export interface PersonalBestComparison {
   isNewBest: boolean;
 }
 
-export function strictRawScore(
-  melody: MelodyMap | null,
-  performance: PerformanceScore,
-): number {
+export function strictRawScore(melody: MelodyMap | null, performance: PerformanceScore): number {
   return melody?.strict_scoring_available === true ? performance.legacy_score : 0;
 }
 
@@ -24,11 +22,12 @@ export function topScoresForSong(
   records: ScoreRecord[],
   songHash: string,
   limit: number,
+  difficulty: ScoringDifficulty = "medium",
 ): Array<{ profile: string; score: number }> {
   const best = new Map<string, number>();
 
   for (const r of records) {
-    if (r.song_hash !== songHash) {
+    if (r.song_hash !== songHash || scoringDifficulty(r.difficulty) !== difficulty) {
       continue;
     }
 
@@ -49,12 +48,17 @@ export function personalBestForRun(
   songHash: string,
   profile: string,
   currentRawScore: number,
+  difficulty: ScoringDifficulty = "medium",
 ): PersonalBestComparison {
   const previousRawScores = records
-    .filter((record) => record.song_hash === songHash && record.profile === profile)
+    .filter(
+      (record) =>
+        record.song_hash === songHash &&
+        record.profile === profile &&
+        scoringDifficulty(record.difficulty) === difficulty,
+    )
     .map((record) => record.score);
-  const previousRaw =
-    previousRawScores.length === 0 ? null : Math.max(...previousRawScores);
+  const previousRaw = previousRawScores.length === 0 ? null : Math.max(...previousRawScores);
   const currentScore = Math.round(currentRawScore / 10);
   const previousScore = previousRaw == null ? null : Math.round(previousRaw / 10);
 

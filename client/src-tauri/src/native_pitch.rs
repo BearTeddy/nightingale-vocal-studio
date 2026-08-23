@@ -12,6 +12,7 @@ const MAX_PITCH_HZ: f32 = 1_200.0;
 const RMS_GATE: f32 = 0.003;
 const POWER_THRESHOLD: f32 = RMS_GATE * RMS_GATE * PITCH_WINDOW_SAMPLES as f32;
 const CLARITY_THRESHOLD: f32 = 0.55;
+const CLIPPED_PEAK: f32 = 0.985;
 const LARGE_JUMP_SEMITONES: f32 = 4.0;
 const JUMP_MATCH_SEMITONES: f32 = 1.5;
 const JUMP_CONFIRMATION_FRAMES: u8 = 3;
@@ -127,7 +128,11 @@ impl NativePitchTracker {
             None
         };
         let clarity = pitch.as_ref().map(|pitch| pitch.clarity).unwrap_or(0.0);
-        let raw_hz = pitch.and_then(|pitch| accepted_frequency(pitch.frequency, pitch.clarity));
+        let raw_hz = if peak >= CLIPPED_PEAK {
+            None
+        } else {
+            pitch.and_then(|pitch| accepted_frequency(pitch.frequency, pitch.clarity))
+        };
         let hz = self.stabilize_pitch(raw_hz);
         let midi = hz.map(|hz| 69.0 + 12.0 * (hz / 440.0).log2());
 
@@ -253,6 +258,14 @@ mod tests {
             .collect::<Vec<_>>();
         let noise = last_frame(&noise);
         assert!(!noise.voiced);
+    }
+
+    #[test]
+    fn rejects_clipped_input_even_when_it_is_periodic() {
+        let clipped = last_frame(&sine_wave(440.0, 1.0, PITCH_WINDOW_SAMPLES * 2));
+        assert!(clipped.peak >= 0.985);
+        assert!(!clipped.voiced);
+        assert_eq!(clipped.hz, None);
     }
 
     #[test]

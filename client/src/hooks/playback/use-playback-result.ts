@@ -54,14 +54,8 @@ export function usePlaybackResult(song: Song): PlaybackResult {
 
   const { isFinished } = usePlaybackTransportState();
   const { handleExit } = usePlaybackTransportActions();
-  const {
-    performance,
-    performanceSeries,
-    melody,
-    recordingTake,
-    recordingStatus,
-    recordingError,
-  } = usePlaybackMicState();
+  const { performance, performanceSeries, melody, recordingTake, recordingStatus, recordingError } =
+    usePlaybackMicState();
   const { skipOutroPending } = usePlaybackTranscriptState();
   const { clearSkipOutroPending } = usePlaybackTranscriptActions();
 
@@ -89,8 +83,7 @@ export function usePlaybackResult(song: Song): PlaybackResult {
 
     const finalScore = strictRawScore(melody, performance);
     const active = profileData?.active ?? null;
-    const shouldShowResult =
-      finalScore > 0 || recordingTake != null || recordingStatus !== "off";
+    const shouldShowResult = finalScore > 0 || recordingTake != null || recordingStatus !== "off";
 
     if (!shouldShowResult) {
       navigate("/", { replace: true });
@@ -101,11 +94,17 @@ export function usePlaybackResult(song: Song): PlaybackResult {
       try {
         setPersonalBest(
           active != null && finalScore > 0
-            ? personalBestForRun(profileData?.scores ?? [], fileHash, active, finalScore)
+            ? personalBestForRun(
+                profileData?.scores ?? [],
+                fileHash,
+                active,
+                finalScore,
+                performance.scoring_difficulty,
+              )
             : null,
         );
         if (active != null && finalScore > 0) {
-          await addScore(fileHash, finalScore);
+          await addScore(fileHash, finalScore, performance.scoring_difficulty);
           await queryClient.invalidateQueries({ queryKey: PROFILES });
         }
         setResultScore(performance.overall);

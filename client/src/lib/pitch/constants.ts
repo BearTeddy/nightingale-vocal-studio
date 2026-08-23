@@ -10,6 +10,7 @@ export const MIC_PITCH_CLARITY_THRESHOLD = 0.55;
 
 export const REF_RMS_GATE = 0.005;
 export const MIC_RMS_GATE = 0.003;
+export const MIC_CLIPPED_PEAK = 0.985;
 
 export const PUSH_INTERVAL_SEC = 0.02;
 export const PITCH_DISCONTINUITY_SEC = 0.5;

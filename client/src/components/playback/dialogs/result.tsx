@@ -23,6 +23,7 @@ import { useRecordingPreview } from "@/hooks/use-recording-preview";
 import type { ScoreRecord } from "@/types/ScoreRecord";
 import type { Song } from "@/types/Song";
 import { cn } from "@/lib/utils";
+import { scoringDifficultyProfile } from "@/lib/pitch/difficulty";
 import { topScoresForSong, type PersonalBestComparison } from "@/utils/playback/result";
 import { Stars } from "@/components/shared/stars";
 import type { PerformanceScore } from "@/types/PerformanceScore";
@@ -176,7 +177,8 @@ export const ResultDialog = ({
     usePlaybackMicActions();
   const { videoExportAvailable, vocalGain } = usePlaybackMicState();
   const strictScoringAvailable = melody?.strict_scoring_available === true;
-  const board = topScoresForSong(scores, song.file_hash, TOP_LIMIT);
+  const difficulty = scoringDifficultyProfile(performance.scoring_difficulty);
+  const board = topScoresForSong(scores, song.file_hash, TOP_LIMIT, performance.scoring_difficulty);
 
   useSpatialNavigation(dialogRef, onFinish, open);
 
@@ -208,7 +210,12 @@ export const ResultDialog = ({
               {strictScoringAvailable ? score : "--"}
             </p>
             {strictScoringAvailable ? (
-              <Stars score={score * 10} size="lg" className="mt-1" />
+              <>
+                <Stars score={score * 10} size="lg" className="mt-1" />
+                <p className="mt-1 text-xs font-medium text-muted-foreground">
+                  {difficulty.label} scoring
+                </p>
+              </>
             ) : (
               <p className="mt-1 text-xs text-muted-foreground">
                 Strict scoring waits for melody analysis or corrected notes.

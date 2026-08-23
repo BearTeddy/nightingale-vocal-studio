@@ -148,6 +148,7 @@ def run_pipeline(
     whisper_model=None, pre_align_cleanup=None, free_gpu_fn=None,
     skip_transcription=False,
     skip_separation=False,
+    verify_melody=False,
 ):
     """Full analysis pipeline: stem separation -> transcription -> save.
 
@@ -170,7 +171,10 @@ def run_pipeline(
                     with open(transcript_path, "r", encoding="utf-8") as f:
                         existing_transcript = json.load(f)
                     progress(96, "Building pitch guide...")
-                    generate_melody(cached_vocals[0], melody_path, existing_transcript, device)
+                    generate_melody(
+                        cached_vocals[0], melody_path, existing_transcript, device,
+                        verify=verify_melody,
+                    )
                 except Exception as e:
                     print(f"[nightingale:LOG] Pitch guide generation failed: {e}", flush=True)
         progress(100, "Already analyzed, skipping")
@@ -210,7 +214,9 @@ def run_pipeline(
             if vocals_path:
                 try:
                     progress(96, "Building pitch guide...")
-                    generate_melody(vocals_path, melody_path, transcript, device)
+                    generate_melody(
+                        vocals_path, melody_path, transcript, device, verify=verify_melody,
+                    )
                 except Exception as e:
                     print(f"[nightingale:LOG] Pitch guide generation failed: {e}", flush=True)
             return
@@ -240,7 +246,9 @@ def run_pipeline(
         if vocals_path:
             try:
                 progress(96, "Building pitch guide...")
-                generate_melody(vocals_path, melody_path, transcript, device)
+                generate_melody(
+                    vocals_path, melody_path, transcript, device, verify=verify_melody,
+                )
             except Exception as e:
                 print(f"[nightingale:LOG] Pitch guide generation failed: {e}", flush=True)
     finally:

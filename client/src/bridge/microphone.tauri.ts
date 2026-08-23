@@ -61,6 +61,9 @@ const stopCapture = (): Promise<void> =>
     activeChannels = null;
   });
 
+const setMonitorEnabled = (enabled: boolean): Promise<void> =>
+  enqueue(() => invoke<void>("set_monitor_enabled", { enabled }));
+
 const getCaptureStatus = (): Promise<MicCaptureStatus> =>
   invoke<MicCaptureStatus>("get_mic_capture_status");
 
@@ -71,6 +74,7 @@ export const tauriMicrophoneAdapter: MicrophoneAdapter = {
   listDevices,
   startCapture,
   stopCapture,
+  setMonitorEnabled,
   onSamples: async (cb) => subscribeMicSamples(cb),
   onPitch: async (cb) => subscribeNativePitch(cb),
   getCaptureStatus,

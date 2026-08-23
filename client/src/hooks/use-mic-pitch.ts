@@ -249,7 +249,15 @@ export function useMicCapture(
       }
       setActive(false);
     };
-  }, [enabled, options.emit_audio, deviceId, adapter, retryGeneration, cancelRetry, scheduleRetry]);
+  }, [
+    enabled,
+    options.monitor_mode,
+    deviceId,
+    adapter,
+    retryGeneration,
+    cancelRetry,
+    scheduleRetry,
+  ]);
 
   useEffect(() => cancelRetry, [cancelRetry]);
 

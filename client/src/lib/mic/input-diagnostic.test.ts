@@ -14,6 +14,17 @@ const status = (overrides: Partial<MicCaptureStatus> = {}): MicCaptureStatus => 
   pitch_errors: 0,
   rms: 0.05,
   peak: 0.2,
+  monitor_requested: false,
+  monitor_available: false,
+  monitor_active: false,
+  monitor_input_sample_rate: 48_000,
+  monitor_output_sample_rate: 48_000,
+  monitor_buffered_frames: 0,
+  monitor_target_frames: 384,
+  monitor_underruns: 0,
+  monitor_overruns: 0,
+  monitor_estimated_latency_ms: 0,
+  monitor_mode: "low_latency",
   ...overrides,
 });
 
