@@ -5,6 +5,7 @@ import { EditLyricsDialog } from "@/components/menu/dialogs/edit-lyrics";
 import { MelodyEditorDialog } from "@/components/menu/dialogs/melody-editor";
 import { ExitDialog } from "@/components/menu/dialogs/exit";
 import { InfoDialog } from "@/components/menu/dialogs/info";
+import { LeaderboardsDialog } from "@/components/menu/dialogs/leaderboards";
 import { JellyfinConnectDialog } from "@/components/menu/dialogs/remote-source/jellyfin-connect";
 import { NavidromeConnectDialog } from "@/components/menu/dialogs/remote-source/navidrome-connect";
 import { PlexConnectDialog } from "@/components/menu/dialogs/remote-source/plex-connect";
@@ -72,6 +73,7 @@ export const MenuLayout = () => {
       <CreateProfileDialog />
       <SelectProfileDialog />
       <InfoDialog />
+      <LeaderboardsDialog />
       <UpdateDialog />
       <DonateDialog />
       <SelectLanguageDialog />

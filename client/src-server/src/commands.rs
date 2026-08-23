@@ -262,6 +262,18 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             let args: Args = deserialize(payload)?;
             Ok(serde_json::to_value(SongsStore::load(&args.params)).map_err(serde_err)?)
         }
+        "load_songs_by_hashes" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                file_hashes: Vec<String>,
+            }
+            let args: Args = deserialize(payload)?;
+            Ok(
+                serde_json::to_value(SongsStore::load_by_hashes(&args.file_hashes))
+                    .map_err(serde_err)?,
+            )
+        }
         "load_songs_meta" => Ok(serde_json::to_value(SongsStore::load_meta()).map_err(serde_err)?),
         "load_analysis_queue" => {
             Ok(serde_json::to_value(AnalysisQueue::load()).map_err(serde_err)?)

@@ -1,10 +1,6 @@
 import type { MelodyMap } from "@/types/MelodyMap";
 
-export function transformMelodyMap(
-  melody: MelodyMap,
-  keyOffset: number,
-  tempo: number,
-): MelodyMap {
+export function transformMelodyMap(melody: MelodyMap, keyOffset: number, tempo: number): MelodyMap {
   const safeTempo = Number.isFinite(tempo) && tempo > 0 ? tempo : 1;
   const safeKeyOffset = Number.isFinite(keyOffset) ? keyOffset : 0;
   if (safeTempo === 1 && safeKeyOffset === 0) return melody;

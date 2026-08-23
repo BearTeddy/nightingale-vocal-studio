@@ -19,12 +19,10 @@ const frame = (overrides: Partial<PitchFrame> = {}): PitchFrame => ({
 describe("vocal studio feedback", () => {
   it("distinguishes capture startup, quiet input, and unclear pitch", () => {
     expect(createVocalFeedback(null, true, null).state).toBe("waiting");
-    expect(createVocalFeedback(frame({ rms: 0.001, peak: 0.002 }), true, null).state).toBe(
-      "quiet",
-    );
-    expect(createVocalFeedback(frame({ hz: null, midi: null, voiced: false }), true, null).state).toBe(
-      "unclear",
-    );
+    expect(createVocalFeedback(frame({ rms: 0.001, peak: 0.002 }), true, null).state).toBe("quiet");
+    expect(
+      createVocalFeedback(frame({ hz: null, midi: null, voiced: false }), true, null).state,
+    ).toBe("unclear");
   });
 
   it("reports target direction with strict cents accuracy", () => {

@@ -2,13 +2,7 @@ import { MIC_RMS_GATE } from "@/lib/pitch/constants";
 import { centsSimilarity } from "@/lib/pitch/state";
 import type { PitchFrame } from "@/types/PitchFrame";
 
-export type VocalSignalState =
-  | "idle"
-  | "waiting"
-  | "quiet"
-  | "unclear"
-  | "clipping"
-  | "tracking";
+export type VocalSignalState = "idle" | "waiting" | "quiet" | "unclear" | "clipping" | "tracking";
 
 export interface VocalFeedback {
   state: VocalSignalState;

@@ -28,9 +28,7 @@ describe("recording mix recovery", () => {
   });
 
   it("surfaces actionable interrupted-export messages", () => {
-    expect(
-      recordingTakeNotice("recorded", null, "Previous mix export was interrupted."),
-    ).toEqual({
+    expect(recordingTakeNotice("recorded", null, "Previous mix export was interrupted.")).toEqual({
       label: "Previous mix export was interrupted.",
       tone: "warning",
     });

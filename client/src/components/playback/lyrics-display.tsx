@@ -2,18 +2,15 @@ import { usePlaybackTransportActions, usePlaybackTransportState } from "@/contex
 import { cn } from "@/lib/utils";
 import type { AppConfig } from "@/types/AppConfig";
 import type { Segment, Word } from "@/types/Transcript";
-import { memo, useEffect, useRef, useState } from "react";
-
-// Timing offsets: lyrics/words appear slightly before their actual start
-// so the visual transition feels in sync with the audio.
-const LYRICS_LEAD = 0.15;
-const WORD_HIGHLIGHT_LEAD = 0.25;
-
-const COUNTDOWN_DURATION = 3.0;
-const COUNTDOWN_GAP_THRESHOLD = 3.5;
-
-// Grace period after a segment ends before it disappears
-const SEGMENT_LINGER = 0.5;
+import {
+  BUBBLE_COUNTDOWN_SEC,
+  findCurrentSegment,
+  GAP_THRESHOLD_SEC,
+  LYRICS_LEAD,
+  SEGMENT_LINGER,
+  WORD_HIGHLIGHT_LEAD,
+} from "@/utils/playback/lyrics-gap";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 
 interface WordStyle {
   rgb: string;
@@ -52,46 +49,6 @@ function interpolateStyle(from: WordStyle, to: WordStyle, t: number): WordStyle 
     rgb: `rgb(${r},${g},${b})`,
     opacity: lerp(from.opacity, to.opacity, p),
   };
-}
-
-// --- Segment search ---
-
-/**
- * Finds the segment index that should be displayed at a given `time`.
- * Uses `hint` (the last known index) to skip already-passed segments.
- * Prefers the *next* segment when the current time falls in the lead-in window.
- */
-function findCurrentSegment(segments: Segment[], time: number, hint: number): number {
-  const start = hint < segments.length && time >= segments[hint].start - LYRICS_LEAD ? hint : 0;
-
-  for (let i = start; i < segments.length; i++) {
-    if (time >= segments[i].end + SEGMENT_LINGER) {
-      const next = i + 1;
-
-      // Through a short pause, keep the finished line current until the next
-      // line's lead-in begins, so the switch happens when the new line starts
-      // rather than when the old one ends.
-      if (
-        next < segments.length &&
-        segments[next].start - segments[i].end < COUNTDOWN_GAP_THRESHOLD &&
-        time < segments[next].start - LYRICS_LEAD
-      ) {
-        return i;
-      }
-
-      continue;
-    }
-
-    // If we're already in the lead-in of the next segment, jump ahead
-    const next = i + 1;
-    if (next < segments.length && time >= segments[next].start - LYRICS_LEAD) {
-      return next;
-    }
-
-    return i;
-  }
-
-  return Math.max(0, segments.length - 1);
 }
 
 // --- Per-frame DOM updates (called via rAF subscriber, no React re-renders) ---
@@ -224,12 +181,15 @@ function LyricsDisplayImpl({
   );
 
   const hintRef = useRef(0);
+  const renderedIdxRef = useRef(segIdx);
+  const appliedIdxRef = useRef<number | null>(null);
+  const applyRef = useRef<((time: number) => void) | null>(null);
   const wordRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const countdownRef = useRef<HTMLSpanElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const nextContainerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (segments.length === 0) return;
 
     let raf = 0;
@@ -242,32 +202,56 @@ function LyricsDisplayImpl({
         setSegIdx(idx);
       }
 
+      // Wait for React to render the new segment before mutating its visibility.
+      if (idx !== renderedIdxRef.current) {
+        return;
+      }
+
       const seg = segments[idx];
       const isActive = time >= seg.start - LYRICS_LEAD && time <= seg.end + SEGMENT_LINGER;
 
       const gapBefore = idx === 0 ? seg.start : seg.start - segments[idx - 1].end;
       const timeUntil = seg.start - time;
       const showCountdown =
-        gapBefore >= COUNTDOWN_GAP_THRESHOLD && timeUntil > 0 && timeUntil <= COUNTDOWN_DURATION;
+        gapBefore >= GAP_THRESHOLD_SEC && timeUntil > 0 && timeUntil <= BUBBLE_COUNTDOWN_SEC;
 
       // After a line ends, keep it on screen through a short pause until the
       // next line starts (findCurrentSegment holds idx on the finished line).
       const nextStart = idx + 1 < segments.length ? segments[idx + 1].start : Infinity;
       const bridgeShortGap =
-        time > seg.end + SEGMENT_LINGER && nextStart - seg.end < COUNTDOWN_GAP_THRESHOLD;
+        time > seg.end + SEGMENT_LINGER && nextStart - seg.end < GAP_THRESHOLD_SEC;
 
       const showCurrent = isActive || showCountdown || bridgeShortGap;
       const hasNext = idx + 1 < segments.length;
 
+      const inLongGap = gapBefore >= GAP_THRESHOLD_SEC && timeUntil > LYRICS_LEAD;
+      const gapAfter = nextStart - seg.end;
+      // The final countdown may preview a continuous two-line passage.
+      const showNext =
+        showCurrent && hasNext && gapAfter < GAP_THRESHOLD_SEC && (!inLongGap || showCountdown);
+
       if (containerRef.current) containerRef.current.style.display = showCurrent ? "" : "none";
-      if (nextContainerRef.current)
-        nextContainerRef.current.style.display = showCurrent && hasNext ? "" : "none";
+      if (nextContainerRef.current) nextContainerRef.current.style.display = showNext ? "" : "none";
 
       updateCountdown(countdownRef.current, showCountdown, timeUntil);
       // Bridged finished lines are past every word's end, so treating them as
       // active keeps the already-sung colors instead of dropping to unsung.
       updateWordSpans(wordRefs.current, seg.words, time, isActive || bridgeShortGap);
+      appliedIdxRef.current = idx;
     };
+
+    applyRef.current = apply;
+
+    const cleanup = () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      if (applyRef.current === apply) {
+        applyRef.current = null;
+        appliedIdxRef.current = null;
+      }
+    };
+
+    apply(getCurrentTime());
 
     if (animate) {
       const loop = () => {
@@ -276,15 +260,23 @@ function LyricsDisplayImpl({
         raf = requestAnimationFrame(loop);
       };
       raf = requestAnimationFrame(loop);
-      return () => {
-        cancelled = true;
-        cancelAnimationFrame(raf);
-      };
+      return cleanup;
     }
 
-    apply(getCurrentTime());
-    return subscribe((time) => apply(time));
+    const unsubscribe = subscribe((time) => apply(time));
+    return () => {
+      cleanup();
+      unsubscribe();
+    };
   }, [segments, subscribe, getCurrentTime, animate]);
+
+  // Synchronize visibility with the committed segment before paint.
+  useLayoutEffect(() => {
+    renderedIdxRef.current = segIdx;
+    if (appliedIdxRef.current !== segIdx) {
+      applyRef.current?.(getCurrentTime());
+    }
+  }, [segIdx, getCurrentTime]);
 
   if (segments.length === 0) {
     return null;

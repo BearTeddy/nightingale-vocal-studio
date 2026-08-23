@@ -17,6 +17,7 @@ import {
   scoringDifficultyProfile,
   type ScoringDifficulty,
 } from "@/lib/pitch/difficulty";
+import { computeLyricGapCaption, findCurrentSegment } from "@/utils/playback/lyrics-gap";
 import { forwardRef, memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { isPixabayTheme, themeName } from "./background";
 import {
@@ -331,6 +332,7 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
     firstSegmentStart,
     lastSegmentEnd,
     introSkipLeadSec,
+    segments,
     transcriptSource,
     phraseLoopEnabled,
   } = usePlaybackTranscriptState();
@@ -356,18 +358,39 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
   const timerRef = useRef<HTMLParagraphElement>(null);
   const skipIntroRef = useRef<HTMLButtonElement>(null);
   const skipOutroRef = useRef<HTMLButtonElement>(null);
+  const gapCaptionRef = useRef<HTMLParagraphElement>(null);
+  const gapHintRef = useRef(0);
 
   const showPixabayCredit = isPixabayTheme(themeIndex);
   const hasTouch = useHasTouchInput();
   const difficultyProfile = scoringDifficultyProfile(scoringDifficulty);
   const nextDifficulty = nextScoringDifficulty(scoringDifficulty);
 
-  // Updates the timer text and skip-button visibility via direct DOM mutation
-  // (rAF subscriber), only triggering a text update when the displayed second changes.
+  // Update playback text without triggering React renders every frame.
   useEffect(() => {
+    const updateGapCaption = (time: number) => {
+      const el = gapCaptionRef.current;
+      if (!el) return;
+      if (segments.length === 0) {
+        el.style.display = "none";
+        return;
+      }
+      const idx = findCurrentSegment(segments, time, gapHintRef.current);
+      gapHintRef.current = idx;
+      const caption = computeLyricGapCaption(segments, time, idx);
+      if (caption) {
+        el.textContent = caption;
+        el.style.display = "";
+      } else {
+        el.style.display = "none";
+      }
+    };
+
+    gapHintRef.current = 0;
     if (timerRef.current) {
       timerRef.current.textContent = `${formatTime(getCurrentTime())} / ${formatTime(duration)}`;
     }
+    updateGapCaption(getCurrentTime());
 
     return subscribe((time) => {
       const sec = Math.floor(time);
@@ -385,8 +408,17 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
       if (skipOutroRef.current) {
         skipOutroRef.current.style.display = time > lastSegmentEnd + 1 ? "" : "none";
       }
+      updateGapCaption(time);
     });
-  }, [subscribe, getCurrentTime, duration, firstSegmentStart, introSkipLeadSec, lastSegmentEnd]);
+  }, [
+    subscribe,
+    getCurrentTime,
+    duration,
+    firstSegmentStart,
+    introSkipLeadSec,
+    lastSegmentEnd,
+    segments,
+  ]);
 
   const hudPositionClass =
     position === "bottom"
@@ -416,6 +448,15 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
             <SkipButton ref={skipIntroRef} label="Skip Intro" onClick={handleSkipIntro} />
             <SkipButton ref={skipOutroRef} label="Skip Outro" onClick={handleSkipOutro} />
           </div>
+          <p
+            ref={gapCaptionRef}
+            role="status"
+            aria-live="polite"
+            className={`truncate text-xs font-medium text-white/60 md:text-sm ${
+              position === "bottom" ? "order-first" : ""
+            }`}
+            style={{ display: "none" }}
+          />
         </div>
 
         <div className={`flex min-w-0 items-end ${hudFlowClass}`}>

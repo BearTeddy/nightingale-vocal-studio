@@ -61,7 +61,7 @@ pub use recording::{
     update_recording_take,
 };
 pub use scanner::{start_scan, start_scan_and_analyze};
-pub use song::SongOrigin;
+pub use song::{Song, SongOrigin};
 pub use song_removal::{RemoveSongResult, remove_song};
 pub use source::{
     JellyfinAuth, JellyfinSource, MediaSource, NavidromeAuth, NavidromeSource, PlexAuth,
