@@ -184,6 +184,7 @@ export function PlaybackMicProvider({
     similarities: [],
     timestamps: [],
   }));
+  const micUserEnabledRef = useRef(micUserEnabled);
   const feedbackModeRef = useRef(feedbackMode);
 
   useEffect(() => {
@@ -240,15 +241,19 @@ export function PlaybackMicProvider({
     });
   }, [micCaptureActive, micMonitorEnabled]);
 
-  const { series, score, performance, getPerformanceSeries } = usePitchScoring(
-    { isReady, duration, getReferenceBuffer: getVocalsBuffer, subscribe },
-    latestFrame,
-    melody,
-    config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
-    selectedScoringDifficulty,
-  );
+  const { series, score, performance, getPerformanceSeries, getPitchInputEvidence } =
+    usePitchScoring(
+      { isReady, duration, getReferenceBuffer: getVocalsBuffer, subscribe },
+      latestFrame,
+      melody,
+      config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+      selectedScoringDifficulty,
+    );
+  const getPitchInputEvidenceRef = useRef(getPitchInputEvidence);
   performanceRef.current = performance;
   getPerformanceSeriesRef.current = getPerformanceSeries;
+  getPitchInputEvidenceRef.current = getPitchInputEvidence;
+  micUserEnabledRef.current = micUserEnabled;
   vocalGainRef.current = vocalGain;
   feedbackModeRef.current = feedbackMode;
 
@@ -323,6 +328,7 @@ export function PlaybackMicProvider({
 
         const scorePayload = performanceRef.current;
         const completedSeries = getPerformanceSeriesRef.current();
+        const pitchInput = getPitchInputEvidenceRef.current(micUserEnabledRef.current);
         if (mountedRef.current) setPerformanceSeries(completedSeries);
         try {
           practiceSessionSavedRef.current = true;
@@ -340,6 +346,7 @@ export function PlaybackMicProvider({
               mic_latency_compensation_sec:
                 config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
               pitch_series: completedSeries,
+              pitch_input: pitchInput,
             }),
             recording_take_id: take.id,
             transport_segments: segments,
@@ -405,6 +412,8 @@ export function PlaybackMicProvider({
       if (practiceSessionSavedRef.current) return;
       const scorePayload = performanceRef.current;
       if (!scorePayload || scorePayload.phrases.length === 0) return;
+      const completedSeries = getPerformanceSeriesRef.current();
+      const pitchInput = getPitchInputEvidenceRef.current(micUserEnabledRef.current);
       practiceSessionSavedRef.current = true;
       const endedAt = Math.floor(Date.now() / 1000);
       try {
@@ -421,7 +430,8 @@ export function PlaybackMicProvider({
             feedback_mode: feedbackModeRef.current,
             mic_latency_compensation_sec:
               config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
-            pitch_series: getPerformanceSeriesRef.current(),
+            pitch_series: completedSeries,
+            pitch_input: pitchInput,
           }),
           recording_take_id: null,
           transport_segments: [],

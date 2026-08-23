@@ -9,7 +9,7 @@ function Progress({
   max = 100,
   ...props
 }: React.ComponentProps<typeof ProgressPrimitive.Root>) {
-  const percentage = max > 0 ? ((value || 0) / max) * 100 : 0;
+  const percentage = max > 0 ? ((value ?? 0) / max) * 100 : 0;
 
   return (
     <ProgressPrimitive.Root
@@ -19,6 +19,7 @@ function Progress({
         className,
       )}
       max={max}
+      value={value}
       {...props}
     >
       <ProgressPrimitive.Indicator

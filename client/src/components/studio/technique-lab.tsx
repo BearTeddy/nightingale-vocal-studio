@@ -33,6 +33,7 @@ interface CapturedAttempt {
 
 interface TechniqueLabProps {
   active: boolean;
+  inactiveReason?: string;
   microphoneActive: boolean;
   deviceId: string;
   latestPitchHz: number | null;
@@ -91,6 +92,7 @@ function brightnessLabel(result: ReturnType<typeof compareRelativeBrightness>): 
 
 export function TechniqueLab({
   active,
+  inactiveReason,
   microphoneActive,
   deviceId,
   latestPitchHz,
@@ -222,8 +224,23 @@ export function TechniqueLab({
     };
   }, [baseline, capturing, comparison, deviceId, releaseCapture, vowel]);
 
+  useEffect(() => {
+    if (active || !capturing) return;
+    samplesRef.current = [];
+    pitchesRef.current = [];
+    sampleRateRef.current = 0;
+    setCaptureProgress(0);
+    setCapturing(null);
+  }, [active, capturing]);
+
   const startCapture = (kind: CaptureKind) => {
-    if (!microphoneActive || capturing || selectedCueSafetySuppressed || sessionSafetyStopped) {
+    if (
+      !active ||
+      !microphoneActive ||
+      capturing ||
+      selectedCueSafetySuppressed ||
+      sessionSafetyStopped
+    ) {
       return;
     }
     samplesRef.current = [];
@@ -266,7 +283,23 @@ export function TechniqueLab({
     onReflection(reflection);
   };
 
+  const stopForSafety = () => {
+    if (!active || sessionSafetyStopped) return;
+    samplesRef.current = [];
+    pitchesRef.current = [];
+    sampleRateRef.current = 0;
+    setCaptureProgress(0);
+    setCapturing(null);
+    reflect("made_harder", 1, 5, true);
+  };
+
   if (!selectedCue) return null;
+
+  const controlsReason = !active
+    ? (inactiveReason ?? "Finish the current singing exercise before using Voice Color Lab.")
+    : !microphoneActive
+      ? "Choose an available microphone above before recording a comparison."
+      : null;
 
   return (
     <section className="border-t border-border pt-6">
@@ -294,6 +327,7 @@ export function TechniqueLab({
           </Select>
           <Select
             value={vowel}
+            disabled={!active || capturing != null || sessionSafetyStopped}
             onValueChange={(value) => {
               setVowel(value);
               resetCaptures();
@@ -319,7 +353,9 @@ export function TechniqueLab({
             <button
               key={cue.id}
               type="button"
-              disabled={safetySuppressed || capturing != null || sessionSafetyStopped}
+              aria-pressed={cue.id === selectedCue.id}
+              aria-describedby={controlsReason ? "technique-lab-controls-status" : undefined}
+              disabled={!active || safetySuppressed || capturing != null || sessionSafetyStopped}
               onClick={() => {
                 setSelectedCueId(cue.id);
                 resetCaptures();
@@ -356,14 +392,17 @@ export function TechniqueLab({
             <Button
               type="button"
               variant="outline"
-              disabled={selectedCueSafetySuppressed || sessionSafetyStopped}
+              aria-describedby={controlsReason ? "technique-lab-controls-status" : undefined}
+              disabled={!active || selectedCueSafetySuppressed || sessionSafetyStopped}
               onClick={() => playReferenceTone(targetMidi)}
             >
               <Volume2 className="size-4" /> Play comfortable target
             </Button>
             <Button
               type="button"
+              aria-describedby={controlsReason ? "technique-lab-controls-status" : undefined}
               disabled={
+                !active ||
                 !microphoneActive ||
                 capturing != null ||
                 selectedCueSafetySuppressed ||
@@ -376,7 +415,9 @@ export function TechniqueLab({
             <Button
               type="button"
               variant={baseline ? "default" : "outline"}
+              aria-describedby={controlsReason ? "technique-lab-controls-status" : undefined}
               disabled={
+                !active ||
                 !baseline ||
                 !microphoneActive ||
                 capturing != null ||
@@ -397,7 +438,27 @@ export function TechniqueLab({
                 <RotateCcw className="size-4" /> Reset
               </Button>
             )}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="text-destructive hover:text-destructive"
+              disabled={!active || sessionSafetyStopped}
+              onClick={stopForSafety}
+            >
+              <ShieldAlert className="size-3.5" /> Stop: pain, strain, or hoarseness
+            </Button>
           </div>
+
+          {controlsReason && (
+            <p
+              id="technique-lab-controls-status"
+              className="mt-3 text-xs text-muted-foreground"
+              role="status"
+            >
+              {controlsReason}
+            </p>
+          )}
 
           {capturing && (
             <div className="mt-4 max-w-xl" aria-live="polite">
@@ -466,15 +527,6 @@ export function TechniqueLab({
                   onClick={() => reflect("made_harder", 2, 4)}
                 >
                   Harder or unclear
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="destructive"
-                  disabled={sessionSafetyStopped}
-                  onClick={() => reflect("made_harder", 1, 5, true)}
-                >
-                  Pain, strain, or hoarse
                 </Button>
               </div>
             </div>

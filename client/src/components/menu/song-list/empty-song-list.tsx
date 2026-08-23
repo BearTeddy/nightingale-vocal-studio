@@ -1,4 +1,5 @@
-import { Disc3Icon, FolderIcon, MusicIcon } from "lucide-react";
+import { Disc3Icon, FolderIcon, GraduationCap, MusicIcon } from "lucide-react";
+import { useNavigate } from "react-router";
 
 import { JellyfinIcon } from "@/components/icons/jellyfin";
 import { PlexIcon } from "@/components/icons/plex";
@@ -17,6 +18,7 @@ import { useLibrarySourceActions } from "@/hooks/use-library-source-actions";
 export const EmptySongList = () => {
   const { selectFolder, isPending, libraryPinned } = useLibrarySourceActions();
   const { setMode } = useDialog();
+  const navigate = useNavigate();
 
   // Pinned library: nothing to pick in-app. An empty list here means the
   // configured folder is still scanning or has no supported files.
@@ -62,6 +64,14 @@ export const EmptySongList = () => {
         <Button variant="outline" onClick={() => selectFolder()} disabled={isPending}>
           <FolderIcon /> Select folder
         </Button>
+        <div className="mt-3 w-full border-t border-border pt-4 text-center">
+          <p className="mb-3 text-xs text-muted-foreground">
+            No songs yet? You can still check your microphone and start learning.
+          </p>
+          <Button onClick={() => navigate("/studio")}>
+            <GraduationCap /> Start Vocal Studio
+          </Button>
+        </div>
       </EmptyContent>
     </Empty>
   );

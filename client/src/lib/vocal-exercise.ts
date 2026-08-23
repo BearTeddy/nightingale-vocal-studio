@@ -77,6 +77,15 @@ const CALL_RESPONSE_SETTLE_SECONDS = 0.12;
 const RHYTHM_OBSERVATION_MARGIN_SECONDS = 0.35;
 const RHYTHM_STABLE_STATE_GAP_SECONDS = 0.12;
 const MIN_MEASURABLE_RHYTHM_EVENTS = 2;
+const MIN_PITCH_EVIDENCE_FRAMES = 8;
+const PITCH_TIMELINE_BIN_COUNT = 4;
+const MIN_PITCH_TIMELINE_BINS = 3;
+const MIN_PITCH_TIMELINE_SPAN_RATIO = 0.6;
+const MIN_TARGET_SEGMENT_FRAMES = 2;
+const MIN_TARGET_LANDING_FRAMES = 2;
+const MIN_TARGET_LANDINGS = 2;
+const MIN_TARGET_LANDING_RATIO = 0.5;
+const MULTI_TARGET_EXERCISES = new Set(["center", "intervals", "scale", "arpeggio", "slides"]);
 
 export function createRhythmOnsetExercise(
   targetMidi: number,
@@ -141,6 +150,94 @@ function deviation(values: number[]): number {
 
 function score(value: number): number {
   return Math.round(Math.max(0, Math.min(100, value)));
+}
+
+function uniqueExerciseFrames(samples: readonly ExerciseFrame[]): ExerciseFrame[] {
+  const seen = new Set<string>();
+  return samples.filter(({ frame }) => {
+    const key = `${frame.sample_rate}:${frame.sample_index}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+interface PitchTimelineCoverage {
+  readonly covered: boolean;
+  readonly occupiedBins: number;
+  readonly spanRatio: number;
+}
+
+function pitchTimelineCoverage(
+  samples: readonly ExerciseFrame[],
+  totalSeconds: number,
+): PitchTimelineCoverage {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
+    return { covered: false, occupiedBins: 0, spanRatio: 0 };
+  }
+  const elapsed = samples
+    .map((sample) => sample.elapsed_sec)
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= totalSeconds);
+  if (elapsed.length === 0) return { covered: false, occupiedBins: 0, spanRatio: 0 };
+
+  const occupiedBins = new Set(
+    elapsed.map((value) =>
+      Math.min(
+        PITCH_TIMELINE_BIN_COUNT - 1,
+        Math.floor((value / totalSeconds) * PITCH_TIMELINE_BIN_COUNT),
+      ),
+    ),
+  ).size;
+  const spanRatio = (Math.max(...elapsed) - Math.min(...elapsed)) / totalSeconds;
+  return {
+    covered: occupiedBins >= MIN_PITCH_TIMELINE_BINS && spanRatio >= MIN_PITCH_TIMELINE_SPAN_RATIO,
+    occupiedBins,
+    spanRatio,
+  };
+}
+
+interface TargetLandingCoverage {
+  readonly segments: number;
+  readonly landedSegments: number;
+  readonly ratio: number;
+}
+
+function targetLandingCoverage(samples: readonly ExerciseFrame[]): TargetLandingCoverage {
+  const ordered = samples
+    .filter((sample) => Number.isFinite(sample.elapsed_sec) && Number.isFinite(sample.target_midi))
+    .slice()
+    .sort((left, right) => left.elapsed_sec - right.elapsed_sec);
+  const segments: Array<{ targetMidi: number; samples: ExerciseFrame[] }> = [];
+
+  for (const sample of ordered) {
+    const current = segments[segments.length - 1];
+    if (!current || Math.abs(current.targetMidi - sample.target_midi) >= 0.01) {
+      segments.push({ targetMidi: sample.target_midi, samples: [sample] });
+    } else {
+      current.samples.push(sample);
+    }
+  }
+
+  const observableSegments = segments.filter(
+    (segment) => segment.samples.length >= MIN_TARGET_SEGMENT_FRAMES,
+  );
+  const landedSegments = observableSegments.filter(
+    (segment) =>
+      segment.samples.filter(
+        ({ frame }) =>
+          Number.isFinite(frame.peak ?? 0) &&
+          (frame.peak ?? 0) < 0.98 &&
+          frame.voiced &&
+          frame.midi != null &&
+          frame.clarity >= 0.35,
+      ).length >= MIN_TARGET_LANDING_FRAMES,
+  ).length;
+
+  return {
+    segments: observableSegments.length,
+    landedSegments,
+    ratio: landedSegments / Math.max(1, observableSegments.length),
+  };
 }
 
 export function adaptExerciseToRange(
@@ -512,28 +609,51 @@ export function analyzeExercise(
   if (exerciseId === "rhythm" || exerciseId === "rhythm-onset") {
     return analyzeRhythmExercise(samples, totalSeconds);
   }
-  const unclipped = samples.filter(
+  const evidenceSamples = uniqueExerciseFrames(samples);
+  const unclipped = evidenceSamples.filter(
     ({ frame }) => Number.isFinite(frame.peak ?? 0) && (frame.peak ?? 0) < 0.98,
   );
   const voiced = unclipped.filter(
     ({ frame }) => frame.voiced && frame.midi != null && frame.clarity >= 0.35,
   );
   const clippingRatio =
-    samples.length === 0 ? 0 : (samples.length - unclipped.length) / Math.max(1, samples.length);
-  const measurable = samples.length >= 4 && voiced.length >= 4 && clippingRatio < 0.1;
+    evidenceSamples.length === 0
+      ? 0
+      : (evidenceSamples.length - unclipped.length) / Math.max(1, evidenceSamples.length);
+  const timelineCoverage = pitchTimelineCoverage(evidenceSamples, totalSeconds);
+  const requiresTargetLandings = MULTI_TARGET_EXERCISES.has(exerciseId);
+  const targetCoverage = targetLandingCoverage(evidenceSamples);
+  const hasTargetCoverage =
+    !requiresTargetLandings ||
+    (targetCoverage.segments >= MIN_TARGET_LANDINGS &&
+      targetCoverage.landedSegments >= MIN_TARGET_LANDINGS &&
+      targetCoverage.ratio >= MIN_TARGET_LANDING_RATIO);
+  const measurable =
+    evidenceSamples.length >= MIN_PITCH_EVIDENCE_FRAMES &&
+    voiced.length >= MIN_PITCH_EVIDENCE_FRAMES &&
+    clippingRatio < 0.1 &&
+    timelineCoverage.covered &&
+    hasTargetCoverage;
   const measurementMessage =
-    samples.length < 4
+    evidenceSamples.length < MIN_PITCH_EVIDENCE_FRAMES
       ? "Not enough microphone evidence was captured. Try the exercise again."
       : clippingRatio >= 0.1
         ? "The input clipped too often to measure fairly. Lower the microphone gain and retry."
-        : voiced.length < 4
+        : voiced.length < MIN_PITCH_EVIDENCE_FRAMES
           ? "No steady sung note was detected. Move closer to the microphone and use an easy vowel."
-          : null;
+          : !timelineCoverage.covered
+            ? "The microphone evidence did not cover enough of the exercise. Keep the microphone running through the full attempt and retry."
+            : requiresTargetLandings && targetCoverage.segments < MIN_TARGET_LANDINGS
+              ? "Not enough distinct note targets were captured to measure this multi-note exercise fairly. Keep the microphone running through the full pattern and retry."
+              : requiresTargetLandings && !hasTargetCoverage
+                ? "Too few note targets had clear sung evidence to measure this multi-note exercise fairly. Sing through more of the pattern and retry."
+                : null;
   const cents = voiced.map(
     ({ frame, target_midi }) => ((frame.midi as number) - target_midi) * 100,
   );
   const pitch = score(average(cents.map((offset) => centsSimilarity(offset) * 100)));
-  const coverage = score((voiced.length / Math.max(1, unclipped.length)) * 100);
+  const voiceCoverage = score((voiced.length / Math.max(1, unclipped.length)) * 100);
+  const coverage = requiresTargetLandings ? score(targetCoverage.ratio * 100) : voiceCoverage;
   const stability = cents.length < 2 ? 0 : score(100 - deviation(cents) * 1.4);
 
   let metrics: ExerciseMetric[];

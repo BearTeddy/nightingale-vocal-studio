@@ -26,6 +26,13 @@ function frame(midi: number | null, rms = 0.08): PitchFrame {
   };
 }
 
+function quietCapture(rms = 0.002): CheckupFrame[] {
+  return Array.from({ length: 30 }, (_, index) => ({
+    elapsed_sec: index / 10,
+    frame: frame(null, rms),
+  }));
+}
+
 describe("vocal checkup", () => {
   it("stores the actual elapsed checkup duration within valid bounds", () => {
     expect(checkupSessionDuration(12.2)).toBe(13);
@@ -191,5 +198,65 @@ describe("vocal checkup", () => {
     expect(result?.clippingPercent).toBeGreaterThan(0);
     expect(result?.rangeCalibrationValid).toBe(false);
     expect(canConfirmComfortableRange(result!, 5, 1)).toBe(false);
+  });
+
+  it("does not validate a short clean burst as a measured range", () => {
+    const samples = quietCapture(0.000001);
+    for (let index = 0; index < 30; index += 1) {
+      samples.push({
+        elapsed_sec: 5 + index * 0.01,
+        frame: frame(58 + index * 0.1),
+      });
+    }
+
+    const result = analyzeVocalCheckup(samples, 60, 123);
+    expect(result).not.toBeNull();
+    expect(result?.microphoneScore).toBeLessThan(100);
+    expect(result?.rangeCalibrationValid).toBe(false);
+  });
+
+  it("requires range evidence across time bins, not just distant frame clusters", () => {
+    const samples = quietCapture();
+    for (let index = 0; index < 20; index += 1) {
+      samples.push({
+        elapsed_sec: 3.1 + index * 0.005,
+        frame: frame(55 + index * 0.1),
+      });
+      samples.push({
+        elapsed_sec: 9.2 + index * 0.005,
+        frame: frame(63 + index * 0.1),
+      });
+    }
+
+    const result = analyzeVocalCheckup(samples, 60, 123);
+    expect(result).not.toBeNull();
+    expect(result?.rangeCalibrationValid).toBe(false);
+  });
+
+  it("does not validate a stalled range stream with repeated timestamps", () => {
+    const samples = quietCapture(0.000001);
+    for (let index = 0; index < 40; index += 1) {
+      samples.push({ elapsed_sec: 5, frame: frame(55 + index * 0.2) });
+    }
+
+    const result = analyzeVocalCheckup(samples, 60, 123);
+    expect(result).not.toBeNull();
+    expect(result?.microphoneScore).toBeLessThan(100);
+    expect(result?.rangeCalibrationValid).toBe(false);
+  });
+
+  it("does not award perfect input quality or validate range without quiet-stage evidence", () => {
+    const samples: CheckupFrame[] = [];
+    for (let index = 0; index < 160; index += 1) {
+      samples.push({
+        elapsed_sec: 3 + index * 0.05,
+        frame: frame(55 + (index / 159) * 14),
+      });
+    }
+
+    const result = analyzeVocalCheckup(samples, 60, 123);
+    expect(result).not.toBeNull();
+    expect(result?.microphoneScore).toBeLessThan(100);
+    expect(result?.rangeCalibrationValid).toBe(false);
   });
 });

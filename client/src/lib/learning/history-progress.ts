@@ -1,4 +1,5 @@
 import type { PracticeSession } from "@/types/PracticeSession";
+import { summarizePitchInputEvidence, type PitchSeries } from "@/lib/pitch/state";
 import { LEARNING_STAGES, STARTER_LESSONS } from "./catalog";
 import { createSkillProgress, updateSkillProgress } from "./progress";
 import type { AssistPreset, AttemptContext, SkillId, SkillProgress } from "./types";
@@ -28,6 +29,11 @@ interface ExercisePayload {
   completion?: unknown;
   feedback_mode?: unknown;
   phrases?: unknown;
+  pitch_input?: {
+    status?: unknown;
+    valid_learning_evidence?: unknown;
+  };
+  pitch_series?: unknown;
 }
 
 function parsePayload(session: PracticeSession): ExercisePayload | null {
@@ -42,6 +48,39 @@ function parsePayload(session: PracticeSession): ExercisePayload | null {
 
 function validAssistPreset(value: unknown): AssistPreset {
   return value === "full" || value === "independent" ? value : "guided";
+}
+
+function persistedPitchSeries(value: unknown): PitchSeries | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<PitchSeries>;
+  if (!Array.isArray(candidate.frames)) return null;
+  return {
+    refPitches: Array.isArray(candidate.refPitches) ? candidate.refPitches : [],
+    userPitches: Array.isArray(candidate.userPitches) ? candidate.userPitches : [],
+    similarities: Array.isArray(candidate.similarities) ? candidate.similarities : [],
+    timestamps: Array.isArray(candidate.timestamps) ? candidate.timestamps : [],
+    frames: candidate.frames,
+    discontinuities: Array.isArray(candidate.discontinuities)
+      ? candidate.discontinuities
+      : undefined,
+  } as PitchSeries;
+}
+
+function karaokePitchInputIsValid(payload: ExercisePayload | null): boolean {
+  const explicit = payload?.pitch_input?.valid_learning_evidence;
+  if (typeof explicit === "boolean") return explicit;
+
+  const status = payload?.pitch_input?.status;
+  if (status === "mic_disabled" || status === "no_frames" || status === "all_clipped") {
+    return false;
+  }
+  if (status === "voiced" || status === "captured_silence") return true;
+
+  const series = persistedPitchSeries(payload?.pitch_series);
+  // Sessions from before dense input frames were persisted cannot be
+  // reclassified safely, so preserve their original history behavior.
+  if (!series) return true;
+  return summarizePitchInputEvidence(series, true).valid_learning_evidence;
 }
 
 function allSkillProgress(): Map<SkillId, SkillProgress> {
@@ -105,7 +144,10 @@ export function buildLearningProgressFromHistory(
           ? Math.max(0, Math.min(100, payload.overall))
           : null;
       const phraseCount = Array.isArray(payload?.phrases) ? payload.phrases.length : 0;
-      validEvidence = payload?.completion === "completed" && phraseCount >= 3;
+      validEvidence =
+        payload?.completion === "completed" &&
+        phraseCount >= 3 &&
+        karaokePitchInputIsValid(payload);
       assistPreset = payload?.feedback_mode === "game" ? "independent" : "guided";
       lessonId = "song-phrases.short-phrase-transfer";
       kind = "transfer";

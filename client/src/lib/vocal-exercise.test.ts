@@ -14,7 +14,7 @@ import {
   type RhythmExerciseDefinition,
 } from "./vocal-exercise";
 
-function sample(elapsed: number, midi = 60, rms = 0.08): ExerciseFrame {
+function sample(elapsed: number, midi = 60, rms = 0.08, targetMidi = 60): ExerciseFrame {
   const frame: PitchFrame = {
     hz: 261.63,
     midi,
@@ -26,7 +26,7 @@ function sample(elapsed: number, midi = 60, rms = 0.08): ExerciseFrame {
     sample_rate: 48_000,
     captured_at_ms: elapsed * 1000,
   };
-  return { elapsed_sec: elapsed, target_midi: 60, frame };
+  return { elapsed_sec: elapsed, target_midi: targetMidi, frame };
 }
 
 function rhythmFrames(
@@ -112,6 +112,59 @@ describe("exercise analysis", () => {
     const result = analyzeExercise("center", clipped, 1);
     expect(result.measurable).toBe(false);
     expect(result.measurementMessage).toMatch(/clipped/);
+  });
+
+  it("does not score a brief first-note burst as a valid multi-note attempt", () => {
+    const firstNoteBurst = Array.from({ length: 12 }, (_, index) => sample(index / 50));
+    const result = analyzeExercise("scale", firstNoteBurst, 5);
+
+    expect(result.measurable).toBe(false);
+    expect(result.measurementMessage).toMatch(/did not cover enough of the exercise/);
+  });
+
+  it("requires voiced evidence across distinct target segments", () => {
+    const targets = [60, 62, 64, 65, 67];
+    const frames = Array.from({ length: 100 }, (_, index) => {
+      const elapsed = index / 20;
+      const target = targets[Math.min(targets.length - 1, Math.floor(elapsed))];
+      const frame = sample(elapsed, target, 0.08, target);
+      if (target !== targets[0]) {
+        frame.frame.voiced = false;
+        frame.frame.midi = null;
+        frame.frame.clarity = 0;
+      }
+      return frame;
+    });
+    const result = analyzeExercise("scale", frames, 5);
+
+    expect(result.measurable).toBe(false);
+    expect(result.metrics.find((metric) => metric.label === "Note coverage")?.score).toBe(20);
+    expect(result.measurementMessage).toMatch(/Too few note targets/);
+  });
+
+  it("accepts evidence that spans the timeline and lands on the multi-note targets", () => {
+    const targets = [60, 62, 64, 65, 67];
+    const frames = Array.from({ length: 100 }, (_, index) => {
+      const elapsed = index / 20;
+      const target = targets[Math.min(targets.length - 1, Math.floor(elapsed))];
+      return sample(elapsed, target, 0.08, target);
+    });
+    const result = analyzeExercise("scale", frames, 5);
+
+    expect(result.measurable).toBe(true);
+    expect(result.overall).toBe(100);
+    expect(result.metrics.find((metric) => metric.label === "Note coverage")?.score).toBe(100);
+  });
+
+  it("rejects endpoint-only evidence even when its elapsed span looks long", () => {
+    const frames = [
+      ...Array.from({ length: 4 }, (_, index) => sample(index * 0.02, 60, 0.08, 60)),
+      ...Array.from({ length: 4 }, (_, index) => sample(4.8 + index * 0.02, 67, 0.08, 67)),
+    ];
+    const result = analyzeExercise("scale", frames, 5);
+
+    expect(result.measurable).toBe(false);
+    expect(result.measurementMessage).toMatch(/did not cover enough of the exercise/);
   });
 
   it("reports vibrato observations without grading one ideal rate or width", () => {

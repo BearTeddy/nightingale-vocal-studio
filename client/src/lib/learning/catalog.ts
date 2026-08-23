@@ -1,6 +1,22 @@
-import type { LearningStageDefinition, LessonDefinition } from "./types";
+import type { LearningStageDefinition, LessonDefinition, SkillId } from "./types";
 
 const ALL_ASSIST_PRESETS = ["full", "guided", "independent"] as const;
+
+export const LEARNING_SKILL_LABELS: Record<SkillId, string> = {
+  "setup.calibration": "Comfortable setup",
+  "hearing.direction": "Hear higher and lower",
+  "pitch.imitation": "Echo a note",
+  "pitch.centering": "Land in the center",
+  "pitch.sustain": "Hold a steady note",
+  "pitch.intervals": "Move between notes",
+  "pitch.contour": "Follow a melody shape",
+  "rhythm.onset": "Start on time",
+  "rhythm.duration": "Match note lengths",
+  "pattern.memory": "Remember short patterns",
+  "song.phrase": "Sing a song phrase",
+  "performance.consistency": "Sing consistently",
+  "expression.dynamics": "Shape volume and expression",
+};
 
 export const LEARNING_STAGES = [
   {

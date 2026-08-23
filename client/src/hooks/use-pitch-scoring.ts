@@ -18,6 +18,7 @@ import {
   pushPitchSeriesFrame,
   sampleAudioBufferRms,
   sampleVocalsWindow,
+  summarizePitchInputEvidence,
 } from "@/lib/pitch/state";
 import type { MelodyMap } from "@/types/MelodyMap";
 import type { ScoringDifficulty } from "@/lib/pitch/difficulty";
@@ -223,8 +224,12 @@ export function usePitchScoring(
   }, [difficulty, getReferenceBuffer, isReady, subscribe]);
 
   const getPerformanceSeries = useCallback((): PitchSeries => denseSeriesRef.current, []);
+  const getPitchInputEvidence = useCallback(
+    (micEnabled: boolean) => summarizePitchInputEvidence(denseSeriesRef.current, micEnabled),
+    [],
+  );
 
-  return { series, score, performance, getPerformanceSeries };
+  return { series, score, performance, getPerformanceSeries, getPitchInputEvidence };
 }
 
 function emptyPerformance(difficulty: ScoringDifficulty): PerformanceScore {

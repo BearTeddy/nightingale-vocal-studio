@@ -45,6 +45,7 @@ import { canRecoverRecordingMix, recordingTakeNotice } from "@/lib/recording-rec
 import { diagnoseMicInput } from "@/lib/mic/input-diagnostic";
 import {
   STARTER_LESSONS,
+  LEARNING_SKILL_LABELS,
   aggregateTechniquePreferences,
   buildExerciseLearningAttemptRequest,
   learningStateToSkillProgress,
@@ -53,6 +54,7 @@ import {
   type MasteryState,
   type SkillProgress,
 } from "@/lib/learning";
+import { summarizeExerciseAttempt } from "@/lib/learning/attempt-summary";
 import { buildLearningProgressFromHistory } from "@/lib/learning/history-progress";
 import type { TechniqueReflection } from "@/lib/learning/technique-coaching";
 import { DEFAULT_MIC_LATENCY_COMPENSATION_SEC } from "@/lib/pitch/constants";
@@ -105,7 +107,10 @@ import type { RecordingTake } from "@/types/RecordingTake";
 import {
   Activity,
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Dumbbell,
   Ear,
   History,
@@ -574,7 +579,11 @@ function SignalStrip({
             <span>INPUT LEVEL</span>
             <span className="tabular-nums">{feedback.level}%</span>
           </div>
-          <Progress value={feedback.level} className="h-2 rounded-none" />
+          <Progress
+            value={feedback.level}
+            aria-label="Microphone input level"
+            className="h-2 rounded-none"
+          />
         </div>
         <div className="text-left sm:text-right">
           <p className="text-[0.625rem] text-muted-foreground">HEARD</p>
@@ -583,7 +592,7 @@ function SignalStrip({
       </div>
 
       <div className="mt-4 grid items-center gap-3 lg:grid-cols-[14rem_minmax(14rem,1fr)_9rem]">
-        <div className="h-11 min-w-0" aria-live="polite" aria-atomic="true">
+        <div className="h-11 min-w-0">
           <p className={`truncate text-sm font-medium ${statusClass}`} title={feedback.headline}>
             {feedback.headline}
           </p>
@@ -604,7 +613,7 @@ function SignalStrip({
             aria-label={targetMidi == null ? "Pitch center" : "Distance from target pitch"}
             aria-valuemin={-100}
             aria-valuemax={100}
-            aria-valuenow={feedback.cents ?? undefined}
+            aria-valuenow={cents ?? undefined}
             className="relative h-4 overflow-hidden bg-muted"
           >
             <div className="absolute inset-y-0 left-[37.5%] w-1/4 bg-emerald-500/20" />
@@ -695,6 +704,7 @@ export function VocalStudioPage() {
   const micDevices = useMicDevices();
   const { mutate: updateConfig, isLoading: inputChanging } = useConfigMutation();
   const [tab, setTab] = useState<StudioTab>("learn");
+  const [micDetailsOpen, setMicDetailsOpen] = useState(false);
   const [voiceProfile, setVoiceProfile] = useState<VoiceProfile | null>(null);
   const [rangeComfortRating, setRangeComfortRating] = useState<number | null>(null);
   const [rangeEffortRating, setRangeEffortRating] = useState<number | null>(null);
@@ -766,14 +776,7 @@ export function VocalStudioPage() {
     () => confirmedRangeFromLearnerProfile(learningState?.learner_profile),
     [learningState?.learner_profile],
   );
-  const practiceRange = useMemo(() => {
-    if (confirmedComfortableRange) return confirmedComfortableRange;
-    if (!voiceProfile?.rangeCalibrationValid) return null;
-    return {
-      lowMidi: voiceProfile.tessituraLowMidi,
-      highMidi: voiceProfile.tessituraHighMidi,
-    };
-  }, [confirmedComfortableRange, voiceProfile]);
+  const practiceRange = confirmedComfortableRange;
   const baseMidi = useMemo(() => {
     if (!practiceRange) return 60;
     return Math.round((practiceRange.lowMidi + practiceRange.highMidi) / 2) - 3;
@@ -815,10 +818,19 @@ export function VocalStudioPage() {
   const learningProgress = useMemo(() => {
     const historyProgress = buildLearningProgressFromHistory(
       history,
-      voiceProfile?.assessmentComplete === true,
+      confirmedComfortableRange != null,
     );
     return mergeLearningProgress(historyProgress, learningStateToSkillProgress(learningState));
-  }, [history, learningState, voiceProfile?.assessmentComplete]);
+  }, [confirmedComfortableRange, history, learningState]);
+  const recommendedSkill = learningProgress.find(
+    (skill) => MASTERY_RANK[skill.mastery] < MASTERY_RANK.independent,
+  );
+  const hasLearningEvidence = learningProgress.some((skill) => skill.validAttemptCount > 0);
+  const attemptSummary = useMemo(
+    () =>
+      exerciseResult == null ? null : summarizeExerciseAttempt(exerciseResult, exerciseCompleted),
+    [exerciseCompleted, exerciseResult],
+  );
 
   const capture = useMicCapture(
     config?.preferred_mic ?? null,
@@ -847,6 +859,8 @@ export function VocalStudioPage() {
     selectedExercise.mode === "listening" || selectedExercise.id === "rhythm"
       ? targetMidi
       : visibleExerciseNoteMidi;
+  const micDetailsForcedOpen = tab === "checkup" || runningExercise != null;
+  const showMicDetails = micDetailsForcedOpen || micDetailsOpen;
 
   useEffect(() => {
     visualPitchTracker.current.reset();
@@ -1408,6 +1422,10 @@ export function VocalStudioPage() {
     async (exercise: Exercise) => {
       await stopExercise();
       if (exercise.mode === "listening") return;
+      if (!practiceRange) {
+        toast.error("Complete the foundation checkup and confirm an easy range first.");
+        return;
+      }
       if (!capture.active) {
         toast.error("The microphone is not ready yet.");
         return;
@@ -1636,6 +1654,12 @@ export function VocalStudioPage() {
   const startListeningSing = useCallback(() => {
     if (!listeningQuestion || !listeningReady) return;
     listeningSingAttempted.current = true;
+    if (!practiceRange) {
+      setListeningSingError(
+        "Finish the foundation checkup and confirm an easy range before singing this note.",
+      );
+      return;
+    }
     if (!capture.active) {
       setListeningSingError(capture.error ?? "The microphone is not ready yet.");
       return;
@@ -1655,7 +1679,14 @@ export function VocalStudioPage() {
       setListeningSingSeconds(Math.max(0, Math.ceil(4 - elapsed)));
       if (elapsed >= 4) finishListeningSing();
     }, 100);
-  }, [capture.active, capture.error, finishListeningSing, listeningQuestion, listeningReady]);
+  }, [
+    capture.active,
+    capture.error,
+    finishListeningSing,
+    listeningQuestion,
+    listeningReady,
+    practiceRange,
+  ]);
 
   useEffect(() => {
     if (
@@ -1669,12 +1700,14 @@ export function VocalStudioPage() {
     ) {
       return;
     }
+    if (!practiceRange) return;
     startListeningSing();
   }, [
     capture.active,
     listeningAnswer,
     listeningQuestion,
     listeningReady,
+    practiceRange,
     runningExercise,
     startListeningSing,
   ]);
@@ -1803,10 +1836,14 @@ export function VocalStudioPage() {
 
   const openTechniqueLab = useCallback(() => {
     changeTab("exercises");
-    window.setTimeout(
-      () => document.getElementById("technique-lab")?.scrollIntoView({ behavior: "smooth" }),
-      0,
-    );
+    window.setTimeout(() => {
+      const target = document.getElementById("technique-lab");
+      if (!target) return;
+      target.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      });
+      target.focus({ preventScroll: true });
+    }, 0);
   }, [changeTab]);
 
   const recoverRecordingMix = useCallback(
@@ -1913,7 +1950,7 @@ export function VocalStudioPage() {
           })}
         </nav>
 
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
           <label className="flex min-w-0 items-center gap-2 text-sm" htmlFor="studio-mic-input">
             <Mic2 className="size-4 shrink-0 text-muted-foreground" />
             <span className="font-medium">Input</span>
@@ -1937,36 +1974,58 @@ export function VocalStudioPage() {
               </SelectContent>
             </Select>
           </label>
-          <span
-            className="min-w-0 truncate text-xs text-muted-foreground"
-            title={capture.deviceName ?? undefined}
-          >
-            {capture.active && capture.deviceName
-              ? `Active: ${capture.deviceName}`
-              : inputChanging
-                ? "Switching input"
-                : "Input unavailable"}
-          </span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className="min-w-0 truncate text-xs text-muted-foreground"
+              title={capture.deviceName ?? undefined}
+            >
+              {capture.active && capture.deviceName
+                ? `Active: ${capture.deviceName}`
+                : inputChanging
+                  ? "Switching input"
+                  : "Input unavailable"}
+            </span>
+            {!micDetailsForcedOpen && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                aria-expanded={showMicDetails}
+                onClick={() => setMicDetailsOpen((current) => !current)}
+              >
+                {showMicDetails ? (
+                  <ChevronUp className="size-3.5" />
+                ) : (
+                  <ChevronDown className="size-3.5" />
+                )}
+                {showMicDetails ? "Hide input details" : "Show input details"}
+              </Button>
+            )}
+          </div>
         </div>
 
-        <SignalStrip
-          frame={
-            tab === "exercises" && exerciseAssistPreset === "independent" && runningExercise != null
-              ? null
-              : displayPitchFrame
-          }
-          active={capture.active && pitchActive}
-          captureActive={capture.active}
-          error={capture.error}
-          captureStatus={capture.status}
-          targetMidi={
-            checkupRunning
-              ? checkupStage.targetMidi
-              : tab === "exercises" && exerciseAssistPreset === "full"
-                ? exerciseDisplayTargetMidi
-                : null
-          }
-        />
+        {showMicDetails && (
+          <SignalStrip
+            frame={
+              tab === "exercises" &&
+              exerciseAssistPreset === "independent" &&
+              runningExercise != null
+                ? null
+                : displayPitchFrame
+            }
+            active={capture.active && pitchActive}
+            captureActive={capture.active}
+            error={capture.error}
+            captureStatus={capture.status}
+            targetMidi={
+              checkupRunning
+                ? checkupStage.targetMidi
+                : tab === "exercises" && exerciseAssistPreset === "full"
+                  ? exerciseDisplayTargetMidi
+                  : null
+            }
+          />
+        )}
 
         {tab === "learn" && (
           <LearningHome
@@ -2022,6 +2081,12 @@ export function VocalStudioPage() {
                     {checkupRunning ? "Cancel checkup" : "Start 30-second checkup"}
                   </Button>
                 </div>
+                {!capture.active && !checkupRunning && (
+                  <p className="mt-3 max-w-xl text-xs text-muted-foreground" role="status">
+                    Microphone not ready. Choose an input above and allow microphone access to start
+                    the checkup.
+                  </p>
+                )}
               </div>
               <div className="border-l border-border pl-6">
                 <p className="text-xs font-medium text-muted-foreground">EXPLORED RANGE</p>
@@ -2193,6 +2258,7 @@ export function VocalStudioPage() {
                 <button
                   key={exercise.id}
                   type="button"
+                  aria-pressed={selectedExercise.id === exercise.id}
                   onClick={() => selectExercise(exercise)}
                   disabled={runningExercise != null || exerciseStopping}
                   className={`w-full border-b border-border px-2 py-3 text-left ${
@@ -2275,6 +2341,13 @@ export function VocalStudioPage() {
                     )}
                   </div>
 
+                  {!practiceRange && (
+                    <p className="mt-3 text-xs text-muted-foreground" role="status">
+                      You can train your ear now. Finish the foundation checkup and confirm an easy
+                      range before using the sung-response step.
+                    </p>
+                  )}
+
                   <div className="mt-5 border-b border-border pb-5">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -2302,6 +2375,8 @@ export function VocalStudioPage() {
                           type="button"
                           variant={runningExercise === "listening-sing" ? "destructive" : "default"}
                           disabled={
+                            !capture.active ||
+                            !practiceRange ||
                             !listeningReady ||
                             (runningExercise != null && runningExercise !== "listening-sing")
                           }
@@ -2459,7 +2534,13 @@ export function VocalStudioPage() {
                     </div>
                     <Button
                       type="button"
-                      disabled={exerciseStopping || (!capture.active && runningExercise == null)}
+                      aria-describedby={
+                        !capture.active || !practiceRange ? "exercise-readiness-status" : undefined
+                      }
+                      disabled={
+                        exerciseStopping ||
+                        ((!capture.active || !practiceRange) && runningExercise == null)
+                      }
                       onClick={() =>
                         void (runningExercise ? stopExercise() : startExercise(selectedExercise))
                       }
@@ -2472,6 +2553,17 @@ export function VocalStudioPage() {
                       {exerciseStopping ? "Finishing" : runningExercise ? "Stop" : "Start"}
                     </Button>
                   </div>
+                  {(!capture.active || !practiceRange) && runningExercise == null && (
+                    <p
+                      id="exercise-readiness-status"
+                      className="mt-3 text-xs text-muted-foreground"
+                      role="status"
+                    >
+                      {!capture.active
+                        ? "Microphone not ready. Choose an input above and allow microphone access before starting."
+                        : "Finish the foundation checkup and confirm that its endpoints felt easy before starting pitched exercises."}
+                    </p>
+                  )}
                   <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
                     <Volume2 className="size-4" /> Reference tones stay between{" "}
                     {midiName(selectedPitchPlan.baseMidi + Math.min(...selectedPitchPlan.pattern))}{" "}
@@ -2484,10 +2576,15 @@ export function VocalStudioPage() {
                       ? ` from your ${exerciseHistoryScores[selectedExercise.id]}% previous attempt.`
                       : "."}
                   </p>
-                  {exerciseResult && (
-                    <div className="mt-5 max-w-xl border-t border-border pt-4">
+                  {exerciseResult && attemptSummary && (
+                    <div className="mt-5 max-w-xl border-y border-border py-4" aria-live="polite">
+                      <p className="text-xs font-medium text-primary">PRACTICE COMPLETE</p>
+                      <h3 className="mt-1 text-lg font-semibold">{attemptSummary.title}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {attemptSummary.detail}
+                      </p>
                       {exerciseResult.measurable && (
-                        <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="mt-4 grid gap-3 sm:grid-cols-3">
                           {exerciseResult.metrics.map((metric) => (
                             <div key={metric.label} className="border-b border-border pb-2">
                               <div className="flex justify-between gap-3 text-xs">
@@ -2509,6 +2606,25 @@ export function VocalStudioPage() {
                           {observation}
                         </p>
                       ))}
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={attemptSummary.nextAction === "continue" ? "outline" : "default"}
+                          disabled={!capture.active || !practiceRange || exerciseStopping}
+                          onClick={() => void startExercise(selectedExercise)}
+                        >
+                          <RefreshCw className="size-3.5" /> Try again
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={attemptSummary.nextAction === "continue" ? "default" : "outline"}
+                          onClick={() => changeTab("learn")}
+                        >
+                          <ArrowRight className="size-3.5" /> Back to today’s plan
+                        </Button>
+                      </div>
                     </div>
                   )}
                   <label className="mt-4 flex w-fit items-center gap-2 text-xs text-muted-foreground">
@@ -2527,7 +2643,7 @@ export function VocalStudioPage() {
                 </>
               )}
 
-              <div id="technique-lab" className="mt-10 scroll-mt-24">
+              <div id="technique-lab" tabIndex={-1} className="mt-10 scroll-mt-24 outline-none">
                 <UpperRangeLadder
                   active={tab === "exercises" && runningExercise == null}
                   microphoneActive={capture.active}
@@ -2546,7 +2662,14 @@ export function VocalStudioPage() {
                   onReflection={saveTechniqueReflection}
                 />
                 <TechniqueLab
-                  active={tab === "exercises" && runningExercise == null}
+                  active={tab === "exercises" && runningExercise == null && practiceRange != null}
+                  inactiveReason={
+                    runningExercise != null
+                      ? "Finish the current singing exercise before using Voice Color Lab."
+                      : practiceRange == null
+                        ? "Complete the foundation checkup and confirm an easy range before trying voice-shape experiments."
+                        : undefined
+                  }
                   microphoneActive={capture.active}
                   deviceId={config?.preferred_mic ?? capture.deviceName ?? "system-default"}
                   latestPitchHz={latestFrame?.voiced ? latestFrame.hz : null}
@@ -2567,6 +2690,21 @@ export function VocalStudioPage() {
               streaks and performance scoring. Loop a short phrase, slow it down, sing it with the
               guide, then remove help and try the full phrase.
             </p>
+            <div className="mt-7 grid max-w-4xl gap-4 sm:grid-cols-3">
+              {[
+                ["Choose", "Open an analyzed song and start in Coach mode."],
+                ["Loop", "Repeat one short phrase slowly until the notes feel predictable."],
+                ["Transfer", "Remove the guide, sing the phrase once, then review the evidence."],
+              ].map(([title, description], index) => (
+                <div key={title} className="border-t border-border pt-3">
+                  <p className="text-xs font-medium text-primary">STEP {index + 1}</p>
+                  <h3 className="mt-1 text-sm font-semibold">{title}</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {description}
+                  </p>
+                </div>
+              ))}
+            </div>
             <Button type="button" className="mt-6" onClick={() => navigate("/")}>
               <LibraryBig className="size-4" /> Open library
             </Button>
@@ -2602,6 +2740,28 @@ export function VocalStudioPage() {
               </Button>
             </div>
             <RecordingPreview preview={recordingPreview} />
+            <div className="mb-6 border-l-2 border-primary py-1 pl-4">
+              <p className="text-xs font-medium text-primary">RECOMMENDED NEXT</p>
+              <h3 className="mt-1 text-lg font-semibold">
+                {recommendedSkill
+                  ? LEARNING_SKILL_LABELS[recommendedSkill.skillId]
+                  : "Use your skills in a song"}
+              </h3>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                {recommendedSkill
+                  ? "Return to today’s plan for the right amount of help and one clear next step."
+                  : "Your foundation skills are independent. Try a short Song Coach phrase next."}
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-3"
+                onClick={() => changeTab(recommendedSkill ? "learn" : "songs")}
+              >
+                <ArrowRight className="size-3.5" />
+                {recommendedSkill ? "Continue today’s plan" : "Open Song Coach"}
+              </Button>
+            </div>
             <div className="mb-6 border-y border-border py-4">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
@@ -2614,21 +2774,29 @@ export function VocalStudioPage() {
                   Repeated valid attempts build mastery; one score is never a diagnosis.
                 </span>
               </div>
-              <div className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
-                {learningProgress.map((skill) => (
-                  <div
-                    key={skill.skillId}
-                    className="flex items-center justify-between border-b border-border pb-2"
-                  >
-                    <span className="text-sm capitalize">
-                      {skill.skillId.replace(".", " · ").split("-").join(" ")}
-                    </span>
-                    <span className="text-xs capitalize text-muted-foreground">
-                      {skill.mastery}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              {hasLearningEvidence ? (
+                <div className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {learningProgress.map((skill) => (
+                    <div
+                      key={skill.skillId}
+                      className="flex items-center justify-between gap-3 border-b border-border pb-2"
+                    >
+                      <span className="text-sm">{LEARNING_SKILL_LABELS[skill.skillId]}</span>
+                      <span className="shrink-0 text-xs capitalize text-muted-foreground">
+                        {skill.mastery}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-4 border border-dashed border-border p-4">
+                  <p className="text-sm font-medium">No practice evidence yet</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Complete the first guided step; Nightingale only records progress from reliable
+                    attempts.
+                  </p>
+                </div>
+              )}
             </div>
             {checkupHistoryScores[0] && (
               <div className="mb-6 border-y border-border py-4">

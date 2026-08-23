@@ -33,9 +33,38 @@ const MASTERY_VALUE: Record<SkillProgress["mastery"], number> = {
   new: 0,
   practicing: 25,
   assisted: 50,
-  independent: 75,
+  independent: 100,
   transferred: 100,
 };
+
+function stageStepLabel(order: number): string {
+  return order === 0 ? "Foundation" : `Level ${order}`;
+}
+
+function planKindLabel(kind: ReturnType<typeof buildDailyPlan>["items"][number]["kind"]): string {
+  switch (kind) {
+    case "check-in":
+      return "check in";
+    case "focus":
+      return "learn";
+    case "reinforce":
+      return "repeat";
+    case "review":
+      return "due review";
+    case "preview":
+      return "next skill";
+    case "transfer":
+      return "song transfer";
+    case "reflection":
+      return "wrap up";
+  }
+}
+
+function assistLabel(preset: AssistPreset): string {
+  if (preset === "full") return "full guide";
+  if (preset === "guided") return "fewer cues";
+  return "no live guide";
+}
 
 function stageProgress(
   stageId: (typeof LEARNING_STAGES)[number]["id"],
@@ -76,17 +105,29 @@ export function LearningHome({
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_19rem]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-primary">
-            <Route className="size-4" /> STAGE {stage.order}: {stage.title.toUpperCase()}
+            <Route className="size-4" /> {stageStepLabel(stage.order).toUpperCase()} ·{" "}
+            {stage.title.toUpperCase()}
           </div>
           <h2 className="mt-2 max-w-3xl text-3xl font-semibold tracking-tight">
-            Today, build one skill and use it somewhere real.
+            {stage.order === 0
+              ? "Start with a comfortable, reliable setup."
+              : `Today’s focus: ${dailyPlan.items.find((item) => item.kind === "focus")?.title ?? stage.title}.`}
           </h2>
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
             {stage.summary} Help fades as your control becomes repeatable, but every exercise stays
             available whenever you want it.
           </p>
 
-          <div className="mt-7 border-y border-border">
+          <div className="mt-7 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold">Your {dailyPlan.totalMinutes}-minute plan</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Work from top to bottom; repeat only once before moving on.
+              </p>
+            </div>
+            <span className="text-xs text-muted-foreground">5 small steps</span>
+          </div>
+          <div className="mt-3 border-y border-border">
             {dailyPlan.items.map((item, index) => (
               <button
                 key={`${item.kind}-${item.lessonId ?? item.title}`}
@@ -100,8 +141,8 @@ export function LearningHome({
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{item.title}</span>
                   <span className="mt-0.5 block text-xs capitalize text-muted-foreground">
-                    {item.kind.replace("-", " ")}
-                    {item.assistPreset ? ` · ${item.assistPreset} guide` : ""}
+                    {planKindLabel(item.kind)}
+                    {item.assistPreset ? ` · ${assistLabel(item.assistPreset)}` : ""}
                     {item.due ? " · due today" : ""}
                   </span>
                 </span>
@@ -150,7 +191,7 @@ export function LearningHome({
           </div>
         </div>
 
-        <aside className="border-l border-border pl-6">
+        <aside className="border-t border-border pt-6 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
           <p className="text-xs font-medium text-muted-foreground">TODAY’S SETUP</p>
           <div className="mt-3 flex items-start gap-3">
             <Mic2 className="mt-0.5 size-5 text-primary" />
@@ -164,7 +205,7 @@ export function LearningHome({
             </div>
           </div>
           <Button type="button" variant="outline" className="mt-4 w-full" onClick={onOpenSetup}>
-            {comfortableRange ? "Repeat setup" : "Start Stage 0 setup"}
+            {comfortableRange ? "Repeat setup" : "Start foundation setup"}
           </Button>
 
           <div className="mt-7 flex items-center justify-between gap-3">
@@ -188,7 +229,7 @@ export function LearningHome({
                         definition.id === stage.id ? "font-medium" : "text-muted-foreground"
                       }
                     >
-                      {definition.order}. {definition.title}
+                      {stageStepLabel(definition.order)} · {definition.title}
                     </span>
                     {value === 100 ? (
                       <CheckCircle2 className="size-3.5 text-emerald-500" />
@@ -198,7 +239,11 @@ export function LearningHome({
                       </span>
                     )}
                   </div>
-                  <Progress value={value} className="h-1 rounded-none" />
+                  <Progress
+                    value={value}
+                    aria-label={`${definition.title} progress`}
+                    className="h-1 rounded-none"
+                  />
                 </div>
               );
             })}

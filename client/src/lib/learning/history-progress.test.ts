@@ -23,6 +23,7 @@ function karaokeSession(
   score: number,
   feedbackMode: "coach" | "game",
   completion: "completed" | "interrupted" = "completed",
+  extras: Record<string, unknown> = {},
 ): PracticeSession {
   return {
     id,
@@ -36,6 +37,7 @@ function karaokeSession(
       completion,
       feedback_mode: feedbackMode,
       phrases: [{}, {}, {}],
+      ...extras,
     }),
     recording_take_id: null,
     transport_segments: [],
@@ -113,5 +115,63 @@ describe("learning progress from practice history", () => {
       true,
     );
     expect(progress.find((item) => item.skillId === "song.phrase")?.mastery).toBe("new");
+  });
+
+  it.each(["mic_disabled", "no_frames", "all_clipped"])(
+    "rejects %s karaoke input as learning evidence",
+    (status) => {
+      const progress = buildLearningProgressFromHistory(
+        [
+          karaokeSession("invalid", 1_000, "song-a", 95, "game", "completed", {
+            pitch_input: { status, valid_learning_evidence: false },
+          }),
+        ],
+        true,
+      );
+      const phraseProgress = progress.find((item) => item.skillId === "song.phrase");
+      expect(phraseProgress).toMatchObject({
+        mastery: "new",
+        attemptCount: 1,
+        validAttemptCount: 0,
+      });
+    },
+  );
+
+  it("keeps healthy captured silence as valid zero-score evidence", () => {
+    const progress = buildLearningProgressFromHistory(
+      [
+        karaokeSession("silent", 1_000, "song-a", 0, "game", "completed", {
+          pitch_input: { status: "captured_silence", valid_learning_evidence: true },
+        }),
+      ],
+      true,
+    );
+    const phraseProgress = progress.find((item) => item.skillId === "song.phrase");
+    expect(phraseProgress).toMatchObject({
+      mastery: "practicing",
+      attemptCount: 1,
+      validAttemptCount: 1,
+    });
+  });
+
+  it("infers invalid input from legacy dense frames when no summary exists", () => {
+    const progress = buildLearningProgressFromHistory(
+      [
+        karaokeSession("missing", 1_000, "song-a", 95, "game", "completed", {
+          pitch_series: {
+            refPitches: [440, 440],
+            userPitches: [null, null],
+            similarities: [0, 0],
+            timestamps: [0.2, 0.4],
+            frames: [null, null],
+          },
+        }),
+      ],
+      true,
+    );
+    expect(progress.find((item) => item.skillId === "song.phrase")).toMatchObject({
+      mastery: "new",
+      validAttemptCount: 0,
+    });
   });
 });

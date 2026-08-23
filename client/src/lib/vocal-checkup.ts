@@ -8,6 +8,18 @@ const ECHO_RESPONSE_DELAY_SECONDS = 0.75;
 const ECHO_RESPONSE_END_SECONDS = 1.95;
 const SUSTAIN_RESPONSE_START_SECONDS = 17.85;
 const RHYTHM_CUE_STARTS = Array.from({ length: 8 }, (_, index) => 23.25 + index * 0.75);
+const QUIET_STAGE_END_SECONDS = 3;
+const RANGE_STAGE_START_SECONDS = 3;
+const RANGE_STAGE_END_SECONDS = 11;
+const EVIDENCE_BIN_SECONDS = 1;
+const MIN_QUIET_FRAMES = 12;
+const MIN_QUIET_SPAN_SECONDS = 2;
+const MIN_QUIET_BINS = 3;
+const MIN_RANGE_CAPTURE_FRAMES = 24;
+const MIN_RANGE_CAPTURE_SPAN_SECONDS = 6;
+const MIN_RANGE_CAPTURE_BINS = 6;
+const MIN_RANGE_VOICED_SPAN_SECONDS = 5;
+const MIN_RANGE_VOICED_BINS = 6;
 
 export interface CheckupFrame {
   elapsed_sec: number;
@@ -101,6 +113,32 @@ function quantile(values: number[], amount: number): number {
   return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * amount))];
 }
 
+function temporalSpan(samples: readonly CheckupFrame[]): number {
+  let earliest = Number.POSITIVE_INFINITY;
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const { elapsed_sec } of samples) {
+    if (!Number.isFinite(elapsed_sec)) continue;
+    earliest = Math.min(earliest, elapsed_sec);
+    latest = Math.max(latest, elapsed_sec);
+  }
+  return Number.isFinite(earliest) && Number.isFinite(latest) ? Math.max(0, latest - earliest) : 0;
+}
+
+function coveredTimeBins(
+  samples: readonly CheckupFrame[],
+  windowStart: number,
+  windowEnd: number,
+): number {
+  const bins = new Set<number>();
+  for (const { elapsed_sec } of samples) {
+    if (!Number.isFinite(elapsed_sec) || elapsed_sec < windowStart || elapsed_sec >= windowEnd) {
+      continue;
+    }
+    bins.add(Math.floor((elapsed_sec - windowStart) / EVIDENCE_BIN_SECONDS));
+  }
+  return bins.size;
+}
+
 export function adaptiveCheckupBaseMidi(
   rangeMidi: readonly number[],
   fallbackMidi: number,
@@ -182,7 +220,10 @@ export function analyzeVocalCheckup(
   baseMidi: number,
   checkedAt = Date.now(),
 ): VocalCheckupResult | null {
-  const rangeWindow = samples.filter(({ elapsed_sec }) => elapsed_sec >= 3 && elapsed_sec < 11);
+  const rangeWindow = samples.filter(
+    ({ elapsed_sec }) =>
+      elapsed_sec >= RANGE_STAGE_START_SECONDS && elapsed_sec < RANGE_STAGE_END_SECONDS,
+  );
   const voiced = samples.filter(
     ({ frame }) =>
       frame.voiced &&
@@ -190,10 +231,29 @@ export function analyzeVocalCheckup(
       frame.clarity >= 0.35 &&
       (frame.peak ?? frame.rms) < 0.98,
   );
-  const rangeMidi = voiced
-    .filter(({ elapsed_sec }) => elapsed_sec >= 3 && elapsed_sec < 11)
-    .map(({ frame }) => frame.midi as number);
+  const rangeVoiced = voiced.filter(
+    ({ elapsed_sec }) =>
+      elapsed_sec >= RANGE_STAGE_START_SECONDS && elapsed_sec < RANGE_STAGE_END_SECONDS,
+  );
+  const rangeMidi = rangeVoiced.map(({ frame }) => frame.midi as number);
   if (rangeMidi.length < 15) return null;
+
+  const rangeCaptureEvidenceAdequate =
+    rangeWindow.length >= MIN_RANGE_CAPTURE_FRAMES &&
+    temporalSpan(rangeWindow) >= MIN_RANGE_CAPTURE_SPAN_SECONDS &&
+    coveredTimeBins(rangeWindow, RANGE_STAGE_START_SECONDS, RANGE_STAGE_END_SECONDS) >=
+      MIN_RANGE_CAPTURE_BINS;
+  const rangeCaptureEvidenceRatio = Math.min(
+    1,
+    rangeWindow.length / MIN_RANGE_CAPTURE_FRAMES,
+    temporalSpan(rangeWindow) / MIN_RANGE_CAPTURE_SPAN_SECONDS,
+    coveredTimeBins(rangeWindow, RANGE_STAGE_START_SECONDS, RANGE_STAGE_END_SECONDS) /
+      MIN_RANGE_CAPTURE_BINS,
+  );
+  const rangeVoicedEvidenceAdequate =
+    temporalSpan(rangeVoiced) >= MIN_RANGE_VOICED_SPAN_SECONDS &&
+    coveredTimeBins(rangeVoiced, RANGE_STAGE_START_SECONDS, RANGE_STAGE_END_SECONDS) >=
+      MIN_RANGE_VOICED_BINS;
 
   const rangeClippingPercent =
     rangeWindow.length === 0
@@ -203,9 +263,20 @@ export function analyzeVocalCheckup(
         100;
   const rangeVoicedPercent = (rangeMidi.length / Math.max(1, rangeWindow.length)) * 100;
 
-  const quietFrames = samples
-    .filter(({ elapsed_sec }) => elapsed_sec < 3)
-    .map(({ frame }) => frame);
+  const quietWindow = samples.filter(
+    ({ elapsed_sec }) => elapsed_sec >= 0 && elapsed_sec < QUIET_STAGE_END_SECONDS,
+  );
+  const quietFrames = quietWindow.map(({ frame }) => frame);
+  const quietEvidenceAdequate =
+    quietWindow.length >= MIN_QUIET_FRAMES &&
+    temporalSpan(quietWindow) >= MIN_QUIET_SPAN_SECONDS &&
+    coveredTimeBins(quietWindow, 0, QUIET_STAGE_END_SECONDS) >= MIN_QUIET_BINS;
+  const quietEvidenceRatio = Math.min(
+    1,
+    quietWindow.length / MIN_QUIET_FRAMES,
+    temporalSpan(quietWindow) / MIN_QUIET_SPAN_SECONDS,
+    coveredTimeBins(quietWindow, 0, QUIET_STAGE_END_SECONDS) / MIN_QUIET_BINS,
+  );
   const noiseRms = average(quietFrames.map((frame) => Math.max(frame.rms, 0.000001)));
   const noiseFloorDb = Math.round(20 * Math.log10(Math.max(noiseRms, 0.000001)));
   const clippingPercent =
@@ -213,9 +284,21 @@ export function analyzeVocalCheckup(
       ? 0
       : (samples.filter(({ frame }) => (frame.peak ?? frame.rms) >= 0.98).length / samples.length) *
         100;
-  const microphoneScore = clampScore(((-noiseFloorDb - 25) / 35) * 100 - clippingPercent * 4);
+  const rawMicrophoneScore = ((-noiseFloorDb - 25) / 35) * 100 - clippingPercent * 4;
+  const inputEvidenceAdequate = quietEvidenceAdequate && rangeCaptureEvidenceAdequate;
+  const inputEvidenceRatio = Math.min(quietEvidenceRatio, rangeCaptureEvidenceRatio);
+  const microphoneScore = clampScore(
+    inputEvidenceAdequate
+      ? rawMicrophoneScore
+      : Math.min(79, rawMicrophoneScore * inputEvidenceRatio),
+  );
   const rangeCalibrationValid =
-    rangeClippingPercent <= 5 && rangeVoicedPercent >= 35 && microphoneScore >= 40;
+    quietEvidenceAdequate &&
+    rangeCaptureEvidenceAdequate &&
+    rangeVoicedEvidenceAdequate &&
+    rangeClippingPercent <= 5 &&
+    rangeVoicedPercent >= 35 &&
+    microphoneScore >= 40;
 
   const matchSamples = voiced.filter(({ elapsed_sec }) => isEchoResponse(elapsed_sec));
   const matchScores = matchSamples.map(({ elapsed_sec, frame }) => {

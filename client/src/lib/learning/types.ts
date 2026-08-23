@@ -91,7 +91,14 @@ export interface SkillProgress {
   readonly reviewRecommended: boolean;
 }
 
-export type DailyPlanItemKind = "check-in" | "focus" | "review" | "transfer" | "reflection";
+export type DailyPlanItemKind =
+  | "check-in"
+  | "focus"
+  | "reinforce"
+  | "review"
+  | "preview"
+  | "transfer"
+  | "reflection";
 
 export interface DailyPlanItem {
   readonly kind: DailyPlanItemKind;

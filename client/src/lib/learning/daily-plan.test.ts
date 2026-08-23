@@ -18,14 +18,23 @@ describe("daily learning plan", () => {
     expect(plan.items.map((item) => [item.kind, item.minutes])).toEqual([
       ["check-in", 1],
       ["focus", 3],
-      ["review", 2],
-      ["transfer", 3],
+      ["reinforce", 2],
+      ["preview", 3],
       ["reflection", 1],
     ]);
     expect(plan.items[1]).toMatchObject({
       lessonId: "ready.setup-check",
       skillId: "setup.calibration",
       assistPreset: "full",
+    });
+    expect(plan.items[2]).toMatchObject({
+      title: "Repeat once: Set up your voice space",
+      lessonId: "ready.setup-check",
+    });
+    expect(plan.items[3]).toMatchObject({
+      title: "Next step: Follow the direction",
+      lessonId: "hear-and-explore.direction-glides",
+      skillId: "hearing.direction",
     });
   });
 
@@ -42,6 +51,11 @@ describe("daily learning plan", () => {
     expect(plan.items[1]).toMatchObject({
       skillId: "hearing.direction",
       assistPreset: "guided",
+    });
+    expect(plan.items[3]).toMatchObject({
+      kind: "preview",
+      lessonId: "pitch-imitation.single-note-echo",
+      skillId: "pitch.imitation",
     });
   });
 

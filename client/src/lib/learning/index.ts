@@ -1,5 +1,5 @@
 export { adaptOneVariable, DEFAULT_CHALLENGE } from "./adaptation";
-export { LEARNING_STAGES, STARTER_LESSONS } from "./catalog";
+export { LEARNING_SKILL_LABELS, LEARNING_STAGES, STARTER_LESSONS } from "./catalog";
 export { buildDailyPlan } from "./daily-plan";
 export {
   EXERCISE_LEARNING_MAP,

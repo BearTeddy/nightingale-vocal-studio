@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MelodyMap } from "@/types/MelodyMap";
 import type { PitchFrame } from "@/types/PitchFrame";
+import { MIC_CLIPPED_PEAK } from "./constants";
 import {
   centsSimilarity,
   displayedCentsOffset,
@@ -15,6 +16,7 @@ import {
   scoreDynamics,
   scorePitchSeries,
   scoreTechnique,
+  summarizePitchInputEvidence,
   VisualPitchTracker,
 } from "./state";
 
@@ -27,6 +29,23 @@ const frame = (midi: number): PitchFrame => ({
   sample_index: 0,
   sample_rate: 48_000,
   captured_at_ms: 0,
+});
+
+const silentFrame = (sampleIndex = 0): PitchFrame => ({
+  ...frame(69),
+  hz: null,
+  midi: null,
+  clarity: 0,
+  rms: 0.0005,
+  peak: 0.001,
+  voiced: false,
+  sample_index: sampleIndex,
+});
+
+const clippedFrame = (sampleIndex = 0): PitchFrame => ({
+  ...silentFrame(sampleIndex),
+  rms: 0.5,
+  peak: MIC_CLIPPED_PEAK,
 });
 
 const melody = (eligible = true): MelodyMap => ({
@@ -168,10 +187,20 @@ describe("strict pitch scoring", () => {
     expect(result.categories.every((category) => !category.available)).toBe(true);
   });
 
-  it("penalizes silence and late entrances without inventing pitch credit", () => {
+  it("leaves scoring unavailable when detector frames never arrive", () => {
+    const unavailable = new MelodyPerformanceScoring(melody());
+    unavailable.accumulate(0.2, null);
+    unavailable.accumulate(0.8, null);
+
+    const result = unavailable.snapshot();
+    expect(result.phrases).toEqual([]);
+    expect(result.categories.every((category) => !category.available)).toBe(true);
+  });
+
+  it("penalizes captured silence and late entrances without inventing pitch credit", () => {
     const silent = new MelodyPerformanceScoring(melody());
-    silent.accumulate(0.2, null);
-    silent.accumulate(0.8, null);
+    silent.accumulate(0.2, silentFrame(1));
+    silent.accumulate(0.8, silentFrame(2));
     const silentResult = silent.snapshot();
     expect(silentResult.phrase_accuracy).toBe(0);
     expect(silentResult.phrases[0]?.accuracy).toBe(0);
@@ -188,10 +217,10 @@ describe("strict pitch scoring", () => {
   it("penalizes partial-note silence and withholds unsupported categories", () => {
     const scoring = new MelodyPerformanceScoring(melody());
     scoring.accumulate(0.1, frame(69));
-    scoring.accumulate(0.3, null);
-    scoring.accumulate(0.5, null);
-    scoring.accumulate(0.7, null);
-    scoring.accumulate(0.9, null);
+    scoring.accumulate(0.3, silentFrame(1));
+    scoring.accumulate(0.5, silentFrame(2));
+    scoring.accumulate(0.7, silentFrame(3));
+    scoring.accumulate(0.9, silentFrame(4));
     const result = scoring.snapshot();
     const category = (key: string) => result.categories.find((item) => item.key === key);
 
@@ -200,6 +229,52 @@ describe("strict pitch scoring", () => {
     expect(category("stability")?.available).toBe(false);
     expect(category("dynamics")?.available).toBe(false);
     expect(category("technique")?.available).toBe(false);
+  });
+
+  it("ignores clipped detector frames instead of treating them as sung silence", () => {
+    const scoring = new MelodyPerformanceScoring(melody());
+    scoring.accumulate(0.2, clippedFrame(1));
+    scoring.accumulate(0.8, clippedFrame(2));
+
+    const result = scoring.snapshot();
+    expect(result.phrases).toEqual([]);
+    expect(result.categories.every((category) => !category.available)).toBe(true);
+  });
+
+  it("classifies unavailable input separately from captured silence", () => {
+    const series = (frames: Array<PitchFrame | null>) => ({
+      frames,
+      userPitches: frames.map((item) => item?.hz ?? null),
+      discontinuities: frames.map(() => false),
+    });
+
+    expect(summarizePitchInputEvidence(series([null, null]), false)).toMatchObject({
+      status: "mic_disabled",
+      valid_learning_evidence: false,
+    });
+    expect(summarizePitchInputEvidence(series([null, null]), true)).toMatchObject({
+      status: "no_frames",
+      valid_learning_evidence: false,
+    });
+    expect(
+      summarizePitchInputEvidence(series([clippedFrame(1), clippedFrame(2)]), true),
+    ).toMatchObject({
+      status: "all_clipped",
+      captured_frames: 2,
+      clipped_frames: 2,
+      valid_learning_evidence: false,
+    });
+    expect(summarizePitchInputEvidence(series([silentFrame(1)]), true)).toMatchObject({
+      status: "captured_silence",
+      captured_frames: 1,
+      voiced_frames: 0,
+      valid_learning_evidence: true,
+    });
+    expect(summarizePitchInputEvidence(series([frame(69)]), true)).toMatchObject({
+      status: "voiced",
+      voiced_frames: 1,
+      valid_learning_evidence: true,
+    });
   });
 
   it("reports the current streak and breaks it after a missed note", () => {

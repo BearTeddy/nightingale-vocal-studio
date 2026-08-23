@@ -98,6 +98,31 @@ function fallbackReview(
     })[0];
 }
 
+function previewLessonFor(
+  stage: LearningStageDefinition,
+  focusLesson: LessonDefinition,
+  stages: readonly LearningStageDefinition[],
+  lessons: readonly LessonDefinition[],
+  progressBySkill: ReadonlyMap<SkillId, SkillProgress>,
+): LessonDefinition | undefined {
+  const stageOrder = new Map(stages.map((definition) => [definition.id, definition.order]));
+  return lessons.find((lesson) => {
+    const lessonOrder = stageOrder.get(lesson.stage) ?? Number.POSITIVE_INFINITY;
+    if (
+      lesson.id === focusLesson.id ||
+      lessonOrder < stage.order ||
+      lessonOrder > stage.order + 1
+    ) {
+      return false;
+    }
+    return lesson.prerequisites.every(
+      (skillId) =>
+        skillId === focusLesson.primarySkill ||
+        MASTERY_RANK[masteryFor(skillId, progressBySkill)] >= MASTERY_RANK.independent,
+    );
+  });
+}
+
 export function buildDailyPlan(options: BuildDailyPlanOptions): DailyPlan {
   const stages = options.stages ?? LEARNING_STAGES;
   const lessons = options.lessons ?? STARTER_LESSONS;
@@ -112,7 +137,8 @@ export function buildDailyPlan(options: BuildDailyPlanOptions): DailyPlan {
   if (!focusLesson) throw new Error(`No lesson is available for the ${stage.id} stage.`);
 
   const due = dueReview(options.nowMs, options.progress);
-  const reviewProgress = due ?? fallbackReview(options.progress, lessons);
+  const fallback = due ? undefined : fallbackReview(options.progress, lessons);
+  const reviewProgress = due ?? fallback;
   const reviewSkill = reviewProgress?.skillId ?? focusSkill;
   const reviewLesson = findLessonForSkill(lessons, reviewSkill) ?? focusLesson;
 
@@ -122,8 +148,9 @@ export function buildDailyPlan(options: BuildDailyPlanOptions): DailyPlan {
       (lesson) =>
         lesson.kind === "transfer" &&
         (stageOrder.get(lesson.stage) ?? Number.POSITIVE_INFINITY) <= stage.order,
-    ) ?? focusLesson;
-  const transferProgress = progressFor(transferLesson.primarySkill, progressBySkill);
+    ) ?? null;
+  const previewLesson = previewLessonFor(stage, focusLesson, stages, lessons, progressBySkill);
+  const applicationLesson = transferLesson ?? previewLesson ?? focusLesson;
 
   const items = [
     {
@@ -143,9 +170,13 @@ export function buildDailyPlan(options: BuildDailyPlanOptions): DailyPlan {
       ),
     },
     {
-      kind: "review",
+      kind: due ? "review" : "reinforce",
       minutes: 2,
-      title: `Review: ${reviewLesson.title}`,
+      title: due
+        ? `Due review: ${reviewLesson.title}`
+        : fallback
+          ? `Keep fresh: ${reviewLesson.title}`
+          : `Repeat once: ${focusLesson.title}`,
       lessonId: reviewLesson.id,
       skillId: reviewSkill,
       assistPreset: lessonAssistance(
@@ -155,14 +186,14 @@ export function buildDailyPlan(options: BuildDailyPlanOptions): DailyPlan {
       due: due != null,
     },
     {
-      kind: "transfer",
+      kind: transferLesson ? "transfer" : "preview",
       minutes: 3,
-      title: transferLesson.kind === "transfer" ? transferLesson.title : "Try it somewhere new",
-      lessonId: transferLesson.id,
-      skillId: transferLesson.primarySkill,
+      title: transferLesson ? transferLesson.title : `Next step: ${applicationLesson.title}`,
+      lessonId: applicationLesson.id,
+      skillId: applicationLesson.primarySkill,
       assistPreset: lessonAssistance(
-        transferLesson,
-        assistanceFor(transferProgress?.mastery ?? masteryFor(focusSkill, progressBySkill)),
+        applicationLesson,
+        assistanceFor(masteryFor(applicationLesson.primarySkill, progressBySkill)),
       ),
     },
     {

@@ -15,8 +15,18 @@ below.
 
 ### Improvements
 
+- Vocal Studio now opens on a clearer foundation-first ten-minute plan, previews the next skill instead of repeating setup as a fake transfer, keeps technical microphone diagnostics collapsed until needed, and gives Skills, Song Coach, and Progress clearer next actions.
+- Voice Color Lab now locks its controls while another exercise is active, keeps a safety-stop action available during experiments, and explains microphone or comfortable-range prerequisites next to disabled controls.
+- Empty libraries now offer a direct **Start Vocal Studio** action, so learners can begin without importing a song first.
 - Long gaps between lyric lines now show a compact countdown beneath the song details, while the circular three-second countdown bubble stays beside the lyric line as the next line approaches. The next lyric block is no longer previewed across an instrumental break.
 - Change "AI generated" to "AI transcribed" in song list.
+
+### Fixes
+
+- Pitch scoring no longer counts missing or clipped detector frames as sung silence, and karaoke sessions with a disabled, stalled, or fully clipped input are excluded from learning evidence.
+- Voice checkups now require signal evidence across the quiet and range stages; short bursts, timestamp stalls, and missing quiet measurements cannot validate a range or receive a perfect input score.
+- Multi-note exercises now require unique pitch frames across the exercise timeline and distinct target segments, preventing a brief first-note burst from earning a complete score.
+- Progress bars now expose their current values to assistive technology, and live pitch meters no longer announce raw out-of-range cent values.
 
 ## [1.1.0] - 2026-08-14
 

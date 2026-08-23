@@ -1,4 +1,5 @@
 import {
+  MIC_CLIPPED_PEAK,
   PITCH_BUFFER_SIZE,
   PITCH_DISCONTINUITY_SEC,
   PITCH_WINDOW_SAMPLES,
@@ -22,6 +23,87 @@ export interface PitchSeries {
   timestamps: number[];
   frames?: (PitchFrame | null)[];
   discontinuities?: boolean[];
+}
+
+export type PitchInputEvidenceStatus =
+  | "voiced"
+  | "captured_silence"
+  | "mic_disabled"
+  | "no_frames"
+  | "all_clipped";
+
+/** Persisted alongside a karaoke score so learning can separate silence from broken input. */
+export interface PitchInputEvidence {
+  schema_version: 1;
+  status: PitchInputEvidenceStatus;
+  mic_enabled: boolean;
+  captured_frames: number;
+  voiced_frames: number;
+  clipped_frames: number;
+  valid_learning_evidence: boolean;
+}
+
+function pitchFrameIsClipped(frame: PitchFrame): boolean {
+  return typeof frame.peak === "number" && frame.peak >= MIC_CLIPPED_PEAK;
+}
+
+export function summarizePitchInputEvidence(
+  series: Pick<PitchSeries, "frames" | "userPitches" | "discontinuities">,
+  micEnabled: boolean,
+): PitchInputEvidence {
+  const frames = series.frames;
+  if (!frames) {
+    const voicedFrames = series.userPitches.filter(
+      (pitch) => typeof pitch === "number" && Number.isFinite(pitch) && pitch > 0,
+    ).length;
+    return {
+      schema_version: 1,
+      status: voicedFrames > 0 ? "voiced" : micEnabled ? "no_frames" : "mic_disabled",
+      mic_enabled: micEnabled,
+      captured_frames: voicedFrames,
+      voiced_frames: voicedFrames,
+      clipped_frames: 0,
+      valid_learning_evidence: voicedFrames > 0,
+    };
+  }
+
+  let capturedFrames = 0;
+  let voicedFrames = 0;
+  let clippedFrames = 0;
+  for (let index = 0; index < frames.length; index += 1) {
+    if (series.discontinuities?.[index]) continue;
+    const frame = frames[index];
+    if (!frame) continue;
+    capturedFrames += 1;
+    if (pitchFrameIsClipped(frame)) {
+      clippedFrames += 1;
+      continue;
+    }
+    if (frame.voiced && frame.hz != null && Number.isFinite(frame.hz) && frame.hz > 0) {
+      voicedFrames += 1;
+    }
+  }
+
+  const usableFrames = capturedFrames - clippedFrames;
+  const status: PitchInputEvidenceStatus =
+    capturedFrames === 0
+      ? micEnabled
+        ? "no_frames"
+        : "mic_disabled"
+      : usableFrames === 0
+        ? "all_clipped"
+        : voicedFrames === 0
+          ? "captured_silence"
+          : "voiced";
+  return {
+    schema_version: 1,
+    status,
+    mic_enabled: micEnabled,
+    captured_frames: capturedFrames,
+    voiced_frames: voicedFrames,
+    clipped_frames: clippedFrames,
+    valid_learning_evidence: usableFrames > 0,
+  };
 }
 
 export function isPitchTimeDiscontinuity(previous: number, current: number): boolean {
@@ -555,6 +637,13 @@ export class MelodyPerformanceScoring {
     }
     this.lastTime = time;
     this.finalizePassedNotes(time);
+    // A missing detector frame means input was unavailable, not that the singer
+    // was silent. Clipped frames are equally unusable. A real, unclipped
+    // unvoiced frame remains an intentional zero-credit silence sample.
+    if (!frame || pitchFrameIsClipped(frame)) {
+      this.latestCents = null;
+      return;
+    }
     const note = findTargetNoteAt(this.notes, time);
     if (!note) {
       this.latestCents = null;
