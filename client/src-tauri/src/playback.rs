@@ -1,9 +1,13 @@
-use app_core::{ensure_mp3_stems_ready_payload, AudioPaths, PixabayVideoDownloaded};
+use app_core::{AudioPaths, PixabayVideoDownloaded, ensure_mp3_stems_ready_payload};
 use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
-pub fn load_transcript(file_hash: String) -> Result<serde_json::Value, String> {
-    app_core::load_transcript(&file_hash).map_err(|e| e.to_string())
+pub async fn load_transcript(file_hash: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app_core::load_transcript(&file_hash).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

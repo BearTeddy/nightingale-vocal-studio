@@ -87,6 +87,20 @@ export const MIC_MONITOR_MODES: SettingsOption[] = [
   },
 ];
 
+export const JAPANESE_LYRICS_DISPLAY: SettingsOption[] = [
+  { value: "both", label: "Original + furigana + romaji" },
+  { value: "furigana", label: "Original + furigana" },
+  { value: "romanization", label: "Original + romaji" },
+  { value: "original", label: "Original kanji / kana only" },
+  { value: "romanization_only", label: "Romaji only" },
+];
+
+export const KOREAN_LYRICS_DISPLAY: SettingsOption[] = [
+  { value: "romanization", label: "Hangul + romanization" },
+  { value: "original", label: "Hangul only" },
+  { value: "romanization_only", label: "Romanization only" },
+];
+
 export const DEFAULTS = {
   separator: "karaoke",
   asr_engine: "whisper",
@@ -141,6 +155,8 @@ export const NAV = {
     micLatency: 5,
     lyricsVerticalPosition: 6,
     lyricsHorizontalPosition: 7,
+    japaneseLyrics: 8,
+    koreanLyrics: 9,
   },
 } as const;
 
@@ -176,7 +192,7 @@ export function getAnalysisNav(isParakeet: boolean) {
 
 export function getSettingsStops(tab: SettingsTab, isParakeet: boolean) {
   if (tab === "general") {
-    return [2, 2, 1, 1, 1, 2, 1, 1, 2];
+    return [2, 2, 1, 1, 1, 2, 1, 1, 1, 1, 2];
   }
 
   return isParakeet

@@ -294,6 +294,9 @@ def align_lang_code(lang: str) -> str:
 def reading(text: str, lang: str):
     """Romanized reading: pykakasi Hepburn (ja), tone-mark pinyin (zh),
     Jyutping (yue), Revised Romanization (ko)."""
+    import unicodedata
+    import re
+    text = unicodedata.normalize("NFC", text)
     if not text:
         return None
     if not clean_for_alignment(text):
@@ -328,8 +331,15 @@ def reading(text: str, lang: str):
         if not _has_hangul(text):
             return None
         try:
-            r = _get_korean_romanizer().translit(text).strip()
+            from koroman import romanize
+            # Romanize only Hangul runs so embedded English keeps its casing.
+            r = re.sub(r"[가-힣]+", lambda match: romanize(match.group(), use_pronunciation_rules=True), text).strip()
             return r or None
+        except ImportError:
+            try:
+                return _get_korean_romanizer().translit(text).strip() or None
+            except Exception:
+                return None
         except Exception:
             return None
     return None
@@ -373,7 +383,7 @@ def attribute_chars_to_tokens(
         idx = 0
         for tok, length in zip(tokens, cleaned_lengths):
             if length == 0:
-                out.append({"word": tok, "_punct": True})
+                out.append({"word": tok, "estimated": True} if any(c.isalnum() for c in tok) else {"word": tok, "_punct": True})
                 continue
             s = seg_start + idx * step
             e = seg_start + (idx + 1) * step
@@ -385,7 +395,7 @@ def attribute_chars_to_tokens(
     cursor = 0
     for tok, length in zip(tokens, cleaned_lengths):
         if length == 0:
-            out.append({"word": tok, "_punct": True})
+            out.append({"word": tok, "estimated": True} if any(c.isalnum() for c in tok) else {"word": tok, "_punct": True})
             continue
         slice_chars = chars_with_ts[cursor:cursor + length]
         cursor += length
@@ -431,11 +441,131 @@ def merge_punct(entries: list[dict]) -> list[dict]:
     return out
 
 
-def attach_reading(entries: list[dict], lang: str) -> None:
-    """Attach a ``reading`` field to each entry that has displayable text."""
-    for e in entries:
-        if "word" not in e:
+def infer_lyric_language(text: str) -> str | None:
+    """Infer only unambiguous scripts; Latin text may be English or romaji."""
+    import unicodedata
+    text = unicodedata.normalize("NFC", text)
+    kana = sum(0x3040 <= ord(c) <= 0x30FF for c in text)
+    hangul = sum(0xAC00 <= ord(c) <= 0xD7AF for c in text)
+    if hangul >= 2 and hangul > kana:
+        return "ko"
+    if kana >= 2 and kana >= hangul:
+        return "ja"
+    return None
+
+
+def _japanese_annotations(text: str) -> list[dict]:
+    """Read the full phrase once, retaining exact source surfaces and spaces.
+
+    UniDic's spelling reading supplies furigana; pronunciation supplies Hepburn
+    (notably grammatical は/へ/を). Never reverse romanization into guessed kanji.
+    """
+    parts = []
+    cursor = 0
+    for token in _get_fugashi()(text):
+        surface = token.surface
+        start = text.find(surface, cursor)
+        if start < 0:
             continue
-        r = reading(e["word"], lang)
-        if r:
-            e["reading"] = r
+        if start > cursor:
+            parts.append({"text": text[cursor:start], "start": cursor, "end": start})
+        end = start + len(surface)
+        part = {"text": surface, "start": start, "end": end}
+        kana = _morpheme_kana(token)
+        if kana and any(0x3040 <= ord(c) <= 0x9FFF for c in surface):
+            hira = _katakana_to_hiragana(kana)
+            if any(0x3400 <= ord(c) <= 0x9FFF or c == "々" for c in surface):
+                part["furigana"] = hira
+            # Hepburn uses a readable spelling for long vowels. Pronunciation
+            # is needed for the small set of particles whose spelling differs.
+            roman_input = hira
+            if getattr(token.feature, "pos1", "") == "助詞":
+                roman_input = {"は": "わ", "へ": "え", "を": "お"}.get(surface, hira)
+            roman = reading(roman_input, "ja")
+            if roman and roman != surface:
+                part["romaji"] = roman
+        parts.append(part)
+        cursor = end
+    if cursor < len(text):
+        parts.append({"text": text[cursor:], "start": cursor, "end": len(text)})
+    return parts
+
+
+def attach_reading(entries: list[dict], lang: str, text: str | None = None) -> None:
+    """Attach context-aware reading parts without changing words or timing."""
+    if not entries:
+        return
+    text = text if text is not None else ("" if is_cjk(lang) else " ").join(e.get("word", "") for e in entries)
+    annotations = []
+    if lang == "ja":
+        try:
+            annotations = _japanese_annotations(text)
+        except Exception:
+            # Optional dictionaries may be unavailable; retain original text.
+            annotations = []
+    cursor = 0
+    for index, entry in enumerate(entries):
+        surface = entry.get("word", "")
+        if not surface:
+            continue
+        start = text.find(surface, cursor)
+        end = start + len(surface)
+        if start >= 0:
+            next_start = text.find(entries[index + 1].get("word", ""), end) if index + 1 < len(entries) else len(text)
+            if next_start >= end and not text[end:next_start].strip():
+                entry["separator"] = text[end:next_start]
+            cursor = end
+        if lang == "ja" and annotations and start >= 0:
+            parts = []
+            for annotation in annotations:
+                left, right = max(start, annotation["start"]), min(end, annotation["end"])
+                if left >= right:
+                    continue
+                part = {"text": text[left:right]}
+                # Never attach a whole morpheme's reading to a fragment of it.
+                if left == annotation["start"] and right == annotation["end"]:
+                    for key in ("furigana", "romaji"):
+                        if key in annotation:
+                            part[key] = annotation[key]
+                parts.append(part)
+            if parts and "".join(p["text"] for p in parts) == surface:
+                entry["annotations"] = parts
+                roman_parts = []
+                for part in parts:
+                    value = part.get("romaji", part["text"])
+                    if roman_parts and value and not value.isspace() and any(c.isalnum() for c in value):
+                        roman_parts.append(" ")
+                    roman_parts.append(value)
+                roman = "".join(roman_parts).strip()
+                entry["romaji"] = roman
+                entry["reading"] = roman  # backwards-compatible older clients
+                continue
+        roman = reading(surface, lang)
+        if roman:
+            entry["reading"] = roman
+            if lang == "ko":
+                entry["romanization"] = roman
+
+
+READINGS_VERSION = 1
+
+
+def annotate_transcript(transcript: dict) -> dict:
+    """Enrich existing, generated, or LRC transcripts without audio processing."""
+    segments = transcript.get("segments", [])
+    text = "\n".join(segment.get("text", "") for segment in segments)
+    language = transcript.get("language")
+    if language in (None, "", "unknown", "und", "auto"):
+        language = infer_lyric_language(text)
+    if language:
+        transcript["language"] = language
+    for segment in segments:
+        attach_reading(segment.get("words", []), language, segment.get("text"))
+    transcript["readings_version"] = READINGS_VERSION
+    return transcript
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    json.dump(annotate_transcript(json.load(sys.stdin)), sys.stdout, ensure_ascii=False)

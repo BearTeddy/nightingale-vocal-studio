@@ -7,14 +7,15 @@ export interface SaveLyricsInput {
   hash: string;
   lines: string[];
   title: string;
+  language?: string;
 }
 
 export const useSaveLyricsMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ hash, lines, title }: SaveLyricsInput) => {
-      await saveLyrics(hash, lines);
+    mutationFn: async ({ hash, lines, title, language }: SaveLyricsInput) => {
+      await saveLyrics(hash, lines, language);
       toast.info(`Realigning lyrics for "${title}"`);
     },
     onSuccess: () => {

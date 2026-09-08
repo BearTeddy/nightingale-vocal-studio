@@ -17,9 +17,16 @@ export function formatSeconds(seconds: number): string {
 
 export function normalizeLines(text: string): string[] {
   return text
+    .normalize("NFC")
     .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+    .map((l) => l.replace(/^\uFEFF/, "").trim())
+    .filter(
+      (l) =>
+        l.length > 0 &&
+        !/^\[(?:verse|chorus|pre[- ]chorus|bridge|intro|outro|instrumental|refrain)(?:\s+\d+)?(?:\s*:[^\]]*)?\]$/i.test(
+          l,
+        ),
+    );
 }
 
 export type LrcLevel = "none" | "line" | "word";
@@ -41,19 +48,22 @@ export function detectLrcLevel(text: string): LrcLevel {
 
 /** Strip all LRC/Enhanced LRC timestamp and metadata tags to plain lyric lines. */
 export function stripLrcToPlainLines(text: string): string[] {
-  return text
-    .split("\n")
-    .map((line) =>
-      line
-        // Metadata tags like [ar:...] / [ti:...] / [offset:...].
-        .replace(/\[[a-z]+:[^\]]*\]/gi, "")
-        // Line timestamps `[mm:ss.xx]` (possibly repeated).
-        .replace(/\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/g, "")
-        // Word timestamps `<mm:ss.xx>`.
-        .replace(/<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>/g, "")
-        .trim(),
-    )
-    .filter((line) => line.length > 0);
+  return normalizeLines(
+    text
+      .split("\n")
+      .map((line) =>
+        line
+          // Metadata tags like [ar:...] / [ti:...] / [offset:...].
+          .replace(/\[[a-z]+:[^\]]*\]/gi, "")
+          // Line timestamps `[mm:ss.xx]` (possibly repeated).
+          .replace(/\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/g, "")
+          // Word timestamps `<mm:ss.xx>`.
+          .replace(/<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>/g, "")
+          .trim(),
+      )
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  );
 }
 
 export function linesFromTranscript(transcript: Transcript): string {

@@ -33,6 +33,8 @@ export type AppConfig = {
   last_video_flavor: number | null;
   lyrics_vertical_position: string | null;
   lyrics_horizontal_position: string | null;
+  japanese_lyrics_display: string | null;
+  korean_lyrics_display: string | null;
   separator: string | null;
   asr_engine: string | null;
   align_backend: string | null;

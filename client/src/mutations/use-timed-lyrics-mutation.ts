@@ -16,14 +16,15 @@ export interface ProvideLrcInput {
   lrcText: string;
   separateStems: boolean;
   title: string;
+  language?: string;
 }
 
 export const useProvideLrcMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ hash, lrcText, separateStems, title }: ProvideLrcInput) => {
-      await provideLrc(hash, lrcText, separateStems);
+    mutationFn: async ({ hash, lrcText, separateStems, title, language }: ProvideLrcInput) => {
+      await provideLrc(hash, lrcText, separateStems, language);
       toast.info(
         separateStems ? `Separating stems for "${title}"` : `Saved timed lyrics for "${title}"`,
       );
@@ -39,14 +40,15 @@ export interface ApplyTimedLyricsInput {
   hash: string;
   lrcText: string;
   title: string;
+  language?: string;
 }
 
 export const useApplyTimedLyricsMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ hash, lrcText, title }: ApplyTimedLyricsInput) => {
-      await applyTimedLyrics(hash, lrcText);
+    mutationFn: async ({ hash, lrcText, title, language }: ApplyTimedLyricsInput) => {
+      await applyTimedLyrics(hash, lrcText, language);
       toast.info(`Applied timed lyrics to "${title}"`);
     },
     onSuccess: () => invalidateLyricsQueries(queryClient),

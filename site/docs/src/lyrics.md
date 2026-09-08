@@ -4,7 +4,11 @@ Nightingale provides word-level synchronized lyrics through two sources.
 
 ## LRCLIB
 
-[LRCLIB](https://lrclib.net) is queried first for existing synced lyrics. When a match is found, lyrics are used directly without needing transcription. This is faster and often more accurate for well-known songs.
+[LRCLIB](https://lrclib.net) is queried first. Close matches are selected using title, artist, duration and original script; ambiguous versions fall back to transcription. Retrieved text is aligned against the isolated vocals. Timings from LRCLIB are used directly only when you explicitly choose **Use LRC** in the editor.
+
+Open **Edit lyrics → Find accurate lyrics** to correct the search title/artist and compare candidates with your pasted lyrics. Japanese original titles work better than translated video titles. The comparison runs locally; only title and artist are sent to LRCLIB. Match scores measure text/metadata similarity, not a guarantee of correct lyrics. Every result links to its source and must be selected before it replaces the editor buffer. Lyrics availability depends on LRCLIB's catalog.
+
+For the best text accuracy, paste the complete original lyrics, keep repeated choruses, choose Japanese/Korean/English (or Auto), and use **Save & realign**. The app aligns your wording to audio rather than rewriting it from recognition. Romaji cannot uniquely determine kanji: use an original-script source to correct the written words. English contractions/capitalization and Korean Unicode normalization are preserved. Bracketed section labels such as `[Chorus]` are omitted from alignment input.
 
 ## WhisperX Transcription
 
@@ -78,19 +82,21 @@ Korean (`ko`) uses `kresnik/wav2vec2-large-xlsr-korean`, which is already eojeol
 
 For all four languages, every word is annotated with a romanized **reading** that appears above the original token during playback:
 
-- Japanese — Hepburn romaji via [pykakasi](https://github.com/miurahr/pykakasi)
+- Japanese — contextual furigana from [fugashi/UniDic](https://github.com/polm/fugashi), with Hepburn romaji via [pykakasi](https://github.com/miurahr/pykakasi); grammatical particles use their spoken readings
 - Chinese — tone-mark pinyin via [pypinyin](https://github.com/mozillazg/python-pinyin)
 - Cantonese — Jyutping via [ToJyutping](https://github.com/CanCLID/ToJyutping)
-- Korean — academic Revised Romanization via [hangul-romanize](https://github.com/youknowone/hangul-romanize)
+- Korean — pronunciation-aware romanization via [koroman](https://github.com/gerosyab/koroman), including liaison, nasal assimilation, lateralization and palatalization; older runtimes without koroman retain the existing spelling-based fallback
 
 Heavy CJK modules are imported lazily on first use, so non-CJK songs don't pay the startup cost.
+
+**Settings → General → Japanese lyrics** offers original only, original + furigana, original + romaji, both guides, or romaji only. **Korean lyrics** offers Hangul only, Hangul + romanization, or romanization only. English keeps its original spelling. Existing songs and timed-LRC files receive cached reading annotations when opened; this does not run vocal separation or forced alignment, and leaves authored text and timestamps intact. Reading guides follow dictionaries and standard pronunciation; artistic readings, proper names, dialect, and sung reductions can differ.
 
 ## Editing & Providing Lyrics
 
 Open a non-USDX song's **Actions** button and choose **Edit lyrics** (ready songs) or **Provide LRC** (un-analyzed songs). The dialog has two tabs:
 
 - **Edit tab** — a textarea for the lyrics. Paste timed **LRC / Enhanced LRC** (line- or word-level) to set timing directly and skip transcription, or paste plain lyrics to run alignment against the audio. For un-analyzed songs an **Audio** choice also appears: separate stems (karaoke) or play over the original mix.
-- **LRCLIB matches tab** — visible when [LRCLIB](https://lrclib.net) returns candidates. Each shows track / artist / album / duration and the lyric body; carousel through them and pick **Use LRC** (synced candidates, applied as-is) or **Use as plain text** (runs alignment).
+- **Find accurate lyrics tab** — always available, including when no matches are found. Correct the title/artist, then press **Search** to rank results against your current input. Each shows track / artist / album / duration, match notes, source and original lyrics; select **Use LRC** to keep supplied timing or **Use text & align to audio** to rebuild timing.
 
 Timed LRC is written straight to the transcript with no ML pass. Skipping stem separation plays the song over its original mix with the guide control hidden; a quick key-detection pass still enables key/tempo shifts, and pitch scoring falls back to the original mix (less accurate). Saved lyrics replace the cached transcript for that song's blake3 hash, so subsequent plays pick up the change immediately. CJK alignment paths are skipped on edits — the editor saves a flat per-line transcript and lets the alignment stage re-derive per-character timings on the next analyzer pass.
 

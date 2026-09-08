@@ -1,17 +1,17 @@
 use app_core::{
-    ensure_mp3_stems_ready_payload, load_lyrics_file, save_lyrics_and_realign,
-    search_lrclib_for_hash, shift_key_done_payload, shift_tempo_done_payload, AnalysisQueue,
-    AppConfig, CacheStats, LibraryMenuFilters, LibraryMenuItems, LibrarySource, LoadSongsParams,
-    PixabayVideoDownloaded, ProfileStore, SongsStore,
+    AnalysisQueue, AppConfig, CacheStats, LibraryMenuFilters, LibraryMenuItems, LibrarySource,
+    LoadSongsParams, PixabayVideoDownloaded, ProfileStore, SongsStore,
+    ensure_mp3_stems_ready_payload, load_lyrics_file, shift_key_done_payload,
+    shift_tempo_done_payload,
 };
 use axum::{
+    Json,
     extract::{Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::events::EventBus;
 use crate::state::AppState;
@@ -347,8 +347,20 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             Ok(serde_json::to_value(load_lyrics_file(&args.file_hash)).map_err(serde_err)?)
         }
         "search_lrclib_lyrics" => {
-            let args: FileHashArgs = deserialize(payload)?;
-            Ok(serde_json::to_value(search_lrclib_for_hash(&args.file_hash)).map_err(serde_err)?)
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                file_hash: String,
+                options: Option<app_core::LyricsSearchOptions>,
+            }
+            let args: Args = deserialize(payload)?;
+            let candidates = tokio::task::spawn_blocking(move || {
+                app_core::search_lyrics_for_hash(&args.file_hash, args.options.unwrap_or_default())
+            })
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(ApiError::bad_request)?;
+            Ok(serde_json::to_value(candidates).map_err(serde_err)?)
         }
         "save_lyrics" => {
             #[derive(Deserialize)]
@@ -356,9 +368,11 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             struct Args {
                 file_hash: String,
                 lines: Vec<String>,
+                language: Option<String>,
             }
             let args: Args = deserialize(payload)?;
-            save_lyrics_and_realign(&args.file_hash, args.lines).map_err(ApiError::bad_request)?;
+            app_core::save_lyrics_with_language(&args.file_hash, args.lines, args.language)
+                .map_err(ApiError::bad_request)?;
             Ok(Value::Null)
         }
         "provide_lrc" => {
@@ -368,10 +382,16 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
                 file_hash: String,
                 lrc_text: String,
                 separate_stems: bool,
+                language: Option<String>,
             }
             let args: Args = deserialize(payload)?;
-            app_core::provide_lrc(&args.file_hash, &args.lrc_text, args.separate_stems)
-                .map_err(ApiError::bad_request)?;
+            app_core::provide_lrc_with_language(
+                &args.file_hash,
+                &args.lrc_text,
+                args.separate_stems,
+                args.language,
+            )
+            .map_err(ApiError::bad_request)?;
             Ok(Value::Null)
         }
         "apply_timed_lyrics" => {
@@ -380,17 +400,24 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
             struct Args {
                 file_hash: String,
                 lrc_text: String,
+                language: Option<String>,
             }
             let args: Args = deserialize(payload)?;
-            app_core::apply_timed_lyrics(&args.file_hash, &args.lrc_text)
-                .map_err(ApiError::bad_request)?;
+            app_core::apply_timed_lyrics_with_language(
+                &args.file_hash,
+                &args.lrc_text,
+                args.language,
+            )
+            .map_err(ApiError::bad_request)?;
             Ok(Value::Null)
         }
 
         // ── Playback ─────────────────────────────────────────────────────
         "load_transcript" => {
             let args: FileHashArgs = deserialize(payload)?;
-            app_core::load_transcript(&args.file_hash)
+            tokio::task::spawn_blocking(move || app_core::load_transcript(&args.file_hash))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
                 .map_err(|e| ApiError::internal(e.to_string()))
         }
         "load_melody_map" => {

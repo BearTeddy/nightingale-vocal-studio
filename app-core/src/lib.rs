@@ -8,6 +8,7 @@ mod library_db;
 mod library_menu;
 mod library_model;
 mod lrc;
+mod lyric_readings;
 mod lyrics;
 pub mod media_server;
 mod melody;
@@ -46,8 +47,10 @@ pub use library_db::{init_library, library_db_path};
 pub use library_menu::{LibraryMenuItem, LibraryMenuItems, load_library_menu_items};
 pub use library_model::{LibraryMenuFilters, LoadSongsParams, SongsMeta, SongsStore};
 pub use lyrics::{
-    LrclibCandidate, LyricsFile, apply_timed_lyrics, load_lyrics_file, provide_lrc,
-    save_lyrics_and_realign, search_lrclib_for_hash,
+    LrclibCandidate, LyricsFile, LyricsSearchOptions, apply_timed_lyrics,
+    apply_timed_lyrics_with_language, load_lyrics_file, provide_lrc, provide_lrc_with_language,
+    save_lyrics_and_realign, save_lyrics_with_language, search_lrclib_for_hash,
+    search_lyrics_for_hash,
 };
 pub use media_server::MediaEndpoint;
 pub use melody::{

@@ -63,6 +63,8 @@ function PlaybackLayout({ song, config }: PlaybackLayoutProps) {
             segments={segments}
             verticalPosition={lyricsVerticalPosition}
             horizontalPosition={lyricsHorizontalPosition}
+            japaneseDisplay={config?.japanese_lyrics_display}
+            koreanDisplay={config?.korean_lyrics_display}
           />
           <PlaybackControls title={song.title} artist={song.artist} config={config} />
         </>

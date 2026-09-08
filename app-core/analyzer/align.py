@@ -2,6 +2,7 @@
 
 import json
 import re
+import unicodedata
 
 import cjk
 from audio import detect_vocal_region
@@ -40,7 +41,7 @@ def align_lyrics(
 
     clean_lines: list[str] = []
     for line in lines:
-        text = line.strip() if isinstance(line, str) else str(line).strip()
+        text = unicodedata.normalize("NFC", line).strip() if isinstance(line, str) else ""
         if text:
             clean_lines.append(text)
 
@@ -54,6 +55,9 @@ def align_lyrics(
     a_device = align_device_for(device)
     c_type = compute_type_for(device)
 
+    # User-supplied script and explicit editor choice override stale language
+    # guesses from an earlier transcription of the same track.
+    language_override = lyrics_data.get("language") or cjk.infer_lyric_language("\n".join(clean_lines)) or language_override
     if language_override and language_override.strip().lower() not in ("unknown", "und", ""):
         language = language_override
         print(f"[nightingale:LOG] Using language override: '{language}'", flush=True)
@@ -124,7 +128,7 @@ def align_lyrics(
     return {"language": language, "segments": segments, "source": "lyrics"}
 
 def _normalize(word: str) -> str:
-    return re.sub(r"[^\w]", "", word).lower()
+    return re.sub(r"[^\w]", "", unicodedata.normalize("NFKC", word)).casefold()
 
 
 def _collect_aligned(align_result: dict) -> list[dict]:
@@ -185,6 +189,12 @@ def _map_chars_to_lines_cjk(
         n = sum(len(r) for _, r in token_pairs)
         if n == 0:
             skipped_empty += 1
+            if any(char.isalnum() for char in original):
+                start = segments[-1]["end"] if segments else 0.0
+                end = next((char["start"] for char in aligned[cursor:] if char["start"] is not None), start + 0.1)
+                end = max(start, end)
+                segments.append({"text": original, "start": start, "end": end,
+                                 "words": [{"word": original, "start": start, "end": end, "estimated": True}]})
             continue
 
         slice_chars = aligned[cursor:cursor + n]
@@ -206,6 +216,13 @@ def _map_chars_to_lines_cjk(
         )
         entries = cjk.merge_punct(entries)
 
+        # Retain source tokens the aligner could not hear. Their interpolated
+        # timing is explicitly marked instead of dropping kanji from the line.
+        for entry in entries:
+            entry.setdefault("start", None)
+            entry.setdefault("end", None)
+        _interpolate_missing(entries)
+
         valid = [e for e in entries if e.get("start") is not None and e.get("end") is not None]
         if not valid:
             continue
@@ -218,7 +235,7 @@ def _map_chars_to_lines_cjk(
             if "score" in e and e["score"] is not None:
                 e["score"] = round(e["score"], 3)
 
-        cjk.attach_reading(valid, language)
+        cjk.attach_reading(valid, language, original)
 
         seg_start = valid[0]["start"]
         seg_end = valid[-1]["end"]
@@ -350,8 +367,14 @@ def _map_qwen_units_to_lines(align_result: dict, clean_lines: list[str], languag
         if not words:
             continue
 
+        words = _restore_source_surfaces(line_text, words)
+        if words is None:
+            # A character mismatch can shift every later line. Let the caller
+            # use the other alignment backend rather than accepting corruption.
+            return []
+
         if cjk.is_supported_lang(language):
-            cjk.attach_reading(words, language)
+            cjk.attach_reading(words, language, line_text)
 
         seg_start = words[0]["start"]
         seg_end = words[-1]["end"]
@@ -375,6 +398,35 @@ def _map_qwen_units_to_lines(align_result: dict, clean_lines: list[str], languag
 
     joiner = "" if cjk.is_cjk(language) else " "
     return _split_long_segments(segments, joiner=joiner)
+
+
+def _restore_source_surfaces(line: str, words: list[dict]) -> list[dict] | None:
+    """Restore source kanji, case and punctuation after Qwen normalization.
+
+    Only restore when the normalized character streams agree exactly. The
+    source remains authoritative; no spelling or homophone is invented.
+    """
+    source = _normalize(line)
+    lengths = [len(_normalize(word["word"])) for word in words]
+    if not source or "".join(_normalize(word["word"]) for word in words) != source:
+        return None
+    positions = []
+    for index, char in enumerate(line):
+        positions.extend([index] * len(_normalize(char)))
+    if len(positions) != len(source):
+        return None
+    cursor = 0
+    previous_end = 0
+    restored = []
+    for index, (word, length) in enumerate(zip(words, lengths)):
+        if length == 0:
+            continue
+        cursor += length
+        end = positions[cursor] if cursor < len(positions) else len(line)
+        surface = line[previous_end:end].strip()
+        previous_end = end
+        restored.append({**word, "word": surface})
+    return restored
 
 
 def _map_words_to_lines(align_result: dict, clean_lines: list[str]) -> list[dict]:

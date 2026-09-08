@@ -15,6 +15,9 @@ below.
 
 ### Improvements
 
+- Lyrics search now ranks title, artist, duration, original script and overlap with supplied lyrics, offers editable search metadata, previews every candidate with its source, and avoids automatically accepting ambiguous versions.
+- Japanese playback supports original text, contextual furigana, Hepburn romaji, both guides, or romaji only. Korean supports Hangul, pronunciation-aware romanization, or both. Existing songs and timed LRC gain guides locally without repeating audio analysis.
+- The lyrics editor offers Japanese, Korean and English language overrides; supplied text retains Unicode spelling, punctuation and repeated choruses through alignment.
 - Vocal Studio now opens on a clearer foundation-first ten-minute plan, previews the next skill instead of repeating setup as a fake transfer, keeps technical microphone diagnostics collapsed until needed, and gives Skills, Song Coach, and Progress clearer next actions.
 - Voice Color Lab now locks its controls while another exercise is active, keeps a safety-stop action available during experiments, and explains microphone or comfortable-range prerequisites next to disabled controls.
 - Empty libraries now offer a direct **Start Vocal Studio** action, so learners can begin without importing a song first.
@@ -23,6 +26,7 @@ below.
 
 ### Fixes
 
+- Synced-only LRCLIB records with null plain lyrics are now usable for forced alignment. Qwen alignment restores original spelling and punctuation, rejects mismatched characters, and missing Japanese/English tokens remain visibly estimated rather than disappearing.
 - Pitch scoring no longer counts missing or clipped detector frames as sung silence, and karaoke sessions with a disabled, stalled, or fully clipped input are excluded from learning evidence.
 - Voice checkups now require signal evidence across the quiet and range stages; short bursts, timestamp stalls, and missing quiet measurements cannot validate a range or receive a perfect input score.
 - Multi-note exercises now require unique pitch frames across the exercise timeline and distinct target segments, preventing a brief first-note burst from earning a complete score.

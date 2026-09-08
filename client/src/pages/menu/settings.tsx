@@ -17,6 +17,8 @@ import {
   DEFAULTS,
   LYRICS_HORIZONTAL_POSITIONS,
   LYRICS_VERTICAL_POSITIONS,
+  JAPANESE_LYRICS_DISPLAY,
+  KOREAN_LYRICS_DISPLAY,
   MIC_MONITOR_MODES,
   MODELS,
   NAV,
@@ -276,6 +278,38 @@ export const SettingsPage = () => {
                         lyrics_horizontal_position as AppConfig["lyrics_horizontal_position"],
                     })
                   }
+                />
+              </Field>
+              <Field>
+                <Label htmlFor="japanese-lyrics-display">Japanese lyrics</Label>
+                <Hint>
+                  Furigana sits above kanji. Romaji helps you sing along. Readings are generated
+                  locally; unusual lyric readings may need correction.
+                </Hint>
+                <SettingsSelect
+                  id="japanese-lyrics-display"
+                  label="Japanese lyrics"
+                  placeholder="Choose readings"
+                  value={config?.japanese_lyrics_display ?? "both"}
+                  options={JAPANESE_LYRICS_DISPLAY}
+                  triggerClassName={getFocusClassName(NAV.general.japaneseLyrics)}
+                  onValueChange={(value) => mutate({ japanese_lyrics_display: value })}
+                />
+              </Field>
+              <Field>
+                <Label htmlFor="korean-lyrics-display">Korean lyrics</Label>
+                <Hint>
+                  Keep the original Hangul, add a pronunciation guide, or show romanization only.
+                  English lyrics keep their original spelling.
+                </Hint>
+                <SettingsSelect
+                  id="korean-lyrics-display"
+                  label="Korean lyrics"
+                  placeholder="Choose readings"
+                  value={config?.korean_lyrics_display ?? "romanization"}
+                  options={KOREAN_LYRICS_DISPLAY}
+                  triggerClassName={getFocusClassName(NAV.general.koreanLyrics)}
+                  onValueChange={(value) => mutate({ korean_lyrics_display: value })}
                 />
               </Field>
             </FieldGroup>

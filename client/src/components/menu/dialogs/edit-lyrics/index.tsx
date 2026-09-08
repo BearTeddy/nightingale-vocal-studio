@@ -7,6 +7,9 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { openUrl } from "@/bridge/opener";
+import type { LyricsSearchOptions } from "@/bridge/lyrics";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useDialogNav } from "@/hooks/navigation/use-dialog-nav";
 import { useDialog } from "@/hooks/use-dialog";
 import { useLyricsEditor } from "@/hooks/use-lyrics-editor";
@@ -49,6 +52,8 @@ interface NavLayout {
   audioSegment: number | null;
   useThisSegment: number | null;
   footerSegment: number;
+  searchSegment: number | null;
+  languageSegment: number | null;
 }
 
 interface NavLayoutInput {
@@ -84,8 +89,10 @@ function navLayout({
   }
 
   if (onLrclib) {
+    segments.push({ key: "search", width: 3 });
     if (hasCandidates) segments.push({ key: "use", width: Math.max(1, useSlots) });
   } else {
+    segments.push({ key: "language", width: 1 });
     segments.push({ key: "editor", width: 1 });
     if (timingNav) segments.push({ key: "timing", width: 2 });
     if (audioNav) segments.push({ key: "audio", width: 2 });
@@ -107,6 +114,8 @@ function navLayout({
     audioSegment: indexOf("audio"),
     useThisSegment: indexOf("use"),
     footerSegment: indexOf("footer") ?? segments.length - 1,
+    searchSegment: indexOf("search"),
+    languageSegment: indexOf("language"),
   };
 }
 
@@ -123,14 +132,19 @@ export const EditLyricsDialog = () => {
   const isAnalyzed = song?.is_analyzed ?? false;
 
   const editor = useLyricsEditor({ song, onSaved: close });
-  const candidatesQuery = useLrclibCandidates(fileHash);
+  const [searchTitle, setSearchTitle] = useState(song?.title ?? "");
+  const [searchArtist, setSearchArtist] = useState(song?.artist ?? "");
+  const [language, setLanguage] = useState("auto");
+  const [searchOptions, setSearchOptions] = useState<LyricsSearchOptions>();
+  const [searchRevision, setSearchRevision] = useState(0);
+  const searchTitleRef = useRef<HTMLInputElement>(null);
+  const searchArtistRef = useRef<HTMLInputElement>(null);
+  const languageRef = useRef<HTMLSelectElement>(null);
+  const candidatesQuery = useLrclibCandidates(fileHash, searchOptions, searchRevision);
   const candidates = candidatesQuery.data ?? [];
   const candidateCount = candidates.length;
-  const matchesLoading = candidatesQuery.isLoading;
-  const hasMatches = isAnalyzed ? candidateCount > 1 : candidateCount > 0;
-  // Show the tab while searching too, so the loading state is visible instead
-  // of the tab silently popping in once results arrive.
-  const showMatchesTab = hasMatches || matchesLoading;
+  const matchesLoading = candidatesQuery.isFetching;
+  const showMatchesTab = true;
 
   const provideLrcMutation = useProvideLrcMutation();
   const applyTimedMutation = useApplyTimedLyricsMutation();
@@ -147,7 +161,24 @@ export const EditLyricsDialog = () => {
     setCarouselIndex(0);
     setTimingChoice("provided");
     setSeparateStems(false);
+    setSearchTitle(song?.title ?? "");
+    setSearchArtist(song?.artist === "Unknown Artist" ? "" : (song?.artist ?? ""));
+    setLanguage(["ja", "ko", "en"].includes(song?.language ?? "") ? song!.language! : "auto");
+    setSearchOptions(undefined);
+    setSearchRevision(0);
   }
+
+  const searchLyrics = () => {
+    if (!searchTitle.trim() || matchesLoading) return;
+    setSearchOptions({
+      title: searchTitle.trim(),
+      artist: searchArtist.trim(),
+      language,
+      reference: stripLrcToPlainLines(editor.text).join("\n"),
+    });
+    setSearchRevision((revision) => revision + 1);
+    setCarouselIndex(0);
+  };
 
   const lrcLevel = useMemo(() => detectLrcLevel(editor.text), [editor.text]);
   const hasLrc = lrcLevel !== "none";
@@ -161,8 +192,7 @@ export const EditLyricsDialog = () => {
 
   const saving =
     provideLrcMutation.isLoading || applyTimedMutation.isLoading || saveLyricsMutation.isLoading;
-  const canSave =
-    !saving && !editor.loadingInitial && editor.isDirty && editor.text.trim().length > 0;
+  const canSave = !saving && !editor.loadingInitial && editor.text.trim().length > 0;
 
   const saveLabel = useProvidedTiming
     ? willSeparate
@@ -195,14 +225,17 @@ export const EditLyricsDialog = () => {
     if (useProvidedTiming) {
       if (willSeparate) {
         provideLrcMutation.mutate(
-          { hash, lrcText: editor.text, separateStems: true, title },
+          { hash, lrcText: editor.text, separateStems: true, title, language },
           { onSuccess: close },
         );
       } else if (isAnalyzed) {
-        applyTimedMutation.mutate({ hash, lrcText: editor.text, title }, { onSuccess: close });
+        applyTimedMutation.mutate(
+          { hash, lrcText: editor.text, title, language },
+          { onSuccess: close },
+        );
       } else {
         provideLrcMutation.mutate(
-          { hash, lrcText: editor.text, separateStems: false, title },
+          { hash, lrcText: editor.text, separateStems: false, title, language },
           { onSuccess: close },
         );
       }
@@ -211,7 +244,7 @@ export const EditLyricsDialog = () => {
 
     const lines = hasLrc ? stripLrcToPlainLines(editor.text) : editor.normalized;
     if (lines.length === 0) return;
-    saveLyricsMutation.mutate({ hash, lines, title }, { onSuccess: close });
+    saveLyricsMutation.mutate({ hash, lines, title, language }, { onSuccess: close });
   };
 
   const applyCandidate = (candidate: LrclibCandidate) => {
@@ -238,7 +271,7 @@ export const EditLyricsDialog = () => {
     showMatchesTab,
     activeTab,
     hasCandidates: candidateCount > 0,
-    useSlots: currentHasLrc ? 2 : 1,
+    useSlots: currentHasLrc ? 3 : 2,
     timingNav,
     audioNav,
   });
@@ -251,16 +284,31 @@ export const EditLyricsDialog = () => {
     containerRef,
     onAction: (segment, slot, action) => {
       const textarea = textareaRef.current;
-      const editingInTextarea = textarea !== null && document.activeElement === textarea;
+      const focusedElement = document.activeElement;
+      const editingInTextarea =
+        focusedElement instanceof HTMLInputElement ||
+        focusedElement instanceof HTMLSelectElement ||
+        (textarea !== null && focusedElement === textarea);
 
       if (editingInTextarea) {
         if (action.back) {
-          textarea.blur();
+          (focusedElement as HTMLElement)?.blur();
         }
         return true;
       }
 
       if (!action.confirm) return false;
+
+      if (segment === layout.languageSegment) {
+        languageRef.current?.focus();
+        return true;
+      }
+      if (segment === layout.searchSegment) {
+        if (slot === 0) searchTitleRef.current?.focus();
+        else if (slot === 1) searchArtistRef.current?.focus();
+        else searchLyrics();
+        return true;
+      }
 
       if (layout.editorSegment !== null && segment === layout.editorSegment) {
         textarea?.focus();
@@ -298,7 +346,8 @@ export const EditLyricsDialog = () => {
         const candidate = candidates[Math.min(carouselIndex, candidateCount - 1)];
         if (candidate) {
           const candidateHasLrc = candidate.synced_lyrics != null;
-          if (candidateHasLrc && slot === 0) applyCandidateLrc(candidate);
+          if (slot === 0) void openUrl(candidate.source_url);
+          else if (candidateHasLrc && slot === 1) applyCandidateLrc(candidate);
           else applyCandidate(candidate);
         }
         return true;
@@ -337,6 +386,29 @@ export const EditLyricsDialog = () => {
 
   const editorPane = (
     <>
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <label htmlFor="lyric-language">Lyrics language</label>
+        <select
+          id="lyric-language"
+          ref={languageRef}
+          value={language}
+          disabled={saving}
+          onChange={(event) => setLanguage(event.target.value)}
+          className={
+            "rounded-md border bg-card px-2 py-1.5 " +
+            ringFor(layout.languageSegment !== null && isFocused(layout.languageSegment))
+          }
+        >
+          <option value="auto">Auto — use the lyric script</option>
+          <option value="ja">Japanese 日本語</option>
+          <option value="ko">Korean 한국어</option>
+          <option value="en">English</option>
+        </select>
+        <p className="basis-full text-muted-foreground">
+          Use original kanji/kana, Hangul, or English, one sung line per row. Keep repeated
+          choruses. Readings are generated separately; choose how to show them in Settings.
+        </p>
+      </div>
       <LyricsEditor
         textareaRef={textareaRef}
         text={editor.text}
@@ -421,7 +493,7 @@ export const EditLyricsDialog = () => {
                       layout.headerSegment !== null && isFocused(layout.headerSegment, 1),
                     )}
                   >
-                    LRCLIB matches
+                    Find accurate lyrics
                     {matchesLoading ? (
                       <Loader2Icon className="size-3 animate-spin" />
                     ) : (
@@ -451,9 +523,55 @@ export const EditLyricsDialog = () => {
               </TabsContent>
 
               <TabsContent value="lrclib" className="mt-3 flex min-h-0 flex-1 flex-col">
+                <div className="mb-3 grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+                  <label className="min-w-0 text-xs">
+                    Song title
+                    <Input
+                      ref={searchTitleRef}
+                      value={searchTitle}
+                      disabled={saving}
+                      className={ringFor(
+                        layout.searchSegment !== null && isFocused(layout.searchSegment, 0),
+                      )}
+                      onChange={(event) => setSearchTitle(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") searchLyrics();
+                      }}
+                    />
+                  </label>
+                  <label className="min-w-0 text-xs">
+                    Artist
+                    <Input
+                      ref={searchArtistRef}
+                      value={searchArtist}
+                      disabled={saving}
+                      className={ringFor(
+                        layout.searchSegment !== null && isFocused(layout.searchSegment, 1),
+                      )}
+                      onChange={(event) => setSearchArtist(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") searchLyrics();
+                      }}
+                    />
+                  </label>
+                  <Button
+                    disabled={matchesLoading || saving || !searchTitle.trim()}
+                    onClick={searchLyrics}
+                    className={ringFor(
+                      layout.searchSegment !== null && isFocused(layout.searchSegment, 2),
+                    )}
+                  >
+                    Search
+                  </Button>
+                </div>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Search LRCLIB using the song’s original title or artist name. Your input is
+                  compared locally to rank matches. Preview the wording before using a version;
+                  results can include covers and alternate versions.
+                </p>
                 <LrclibMatches
                   candidates={candidates}
-                  isLoading={candidatesQuery.isLoading}
+                  isLoading={matchesLoading}
                   isError={candidatesQuery.isError}
                   errorMessage={
                     candidatesQuery.error instanceof Error ? candidatesQuery.error.message : null

@@ -11,6 +11,7 @@ import {
   WORD_HIGHLIGHT_LEAD,
 } from "@/utils/playback/lyrics-gap";
 import { memo, useLayoutEffect, useRef, useState } from "react";
+import { lyricPresentation } from "@/utils/playback/lyric-readings";
 
 interface WordStyle {
   rgb: string;
@@ -104,9 +105,17 @@ interface WordTokenProps {
   readingClass: string;
   refSetter?: (el: HTMLSpanElement | null) => void;
   style: WordStyle;
+  presentation: ReturnType<typeof lyricPresentation>;
 }
 
-function WordToken({ word, hasReading, isLast, readingClass, refSetter, style }: WordTokenProps) {
+function WordToken({
+  hasReading,
+  isLast,
+  readingClass,
+  refSetter,
+  style,
+  presentation,
+}: WordTokenProps) {
   return (
     <span
       ref={refSetter}
@@ -115,11 +124,24 @@ function WordToken({ word, hasReading, isLast, readingClass, refSetter, style }:
     >
       {hasReading && (
         <span className={`block leading-tight font-medium opacity-80 ${readingClass}`}>
-          {word.reading ?? "\u00A0"}
+          {presentation.annotation ?? "\u00A0"}
         </span>
       )}
-      <span>{word.word}</span>
-      {!hasReading && !isLast ? " " : ""}
+      <span>
+        {presentation.parts
+          ? presentation.parts.map((part, index) =>
+              part.furigana ? (
+                <ruby key={index}>
+                  {part.text}
+                  <rt className="text-[0.42em] font-medium">{part.furigana}</rt>
+                </ruby>
+              ) : (
+                <span key={index}>{part.text}</span>
+              ),
+            )
+          : presentation.text}
+      </span>
+      {!hasReading && !isLast ? presentation.separator : ""}
     </span>
   );
 }
@@ -165,12 +187,16 @@ interface LyricsDisplayProps {
   segments: Segment[];
   verticalPosition?: LyricsVerticalPosition | null;
   horizontalPosition?: LyricsHorizontalPosition | null;
+  japaneseDisplay?: string | null;
+  koreanDisplay?: string | null;
 }
 
 function LyricsDisplayImpl({
   segments,
   verticalPosition = "bottom",
   horizontalPosition = "center",
+  japaneseDisplay = "both",
+  koreanDisplay = "romanization",
 }: LyricsDisplayProps) {
   const { isPlaying, paused } = usePlaybackTransportState();
   const { subscribe, getCurrentTime } = usePlaybackTransportActions();
@@ -287,8 +313,10 @@ function LyricsDisplayImpl({
 
   wordRefs.current = [];
 
-  const segHasReading = seg.words.some((w) => w.reading);
-  const nextHasReading = nextSeg?.words.some((w) => w.reading) ?? false;
+  const presentation = (word: Word) =>
+    lyricPresentation(word, japaneseDisplay ?? "both", koreanDisplay ?? "romanization");
+  const segHasReading = seg.words.some((w) => presentation(w).annotation);
+  const nextHasReading = nextSeg?.words.some((w) => presentation(w).annotation) ?? false;
 
   const vertical = verticalPosition ?? "bottom";
   const horizontal = horizontalPosition ?? "center";
@@ -320,6 +348,7 @@ function LyricsDisplayImpl({
               <WordToken
                 key={`${segIdx}-${wi}`}
                 word={word}
+                presentation={presentation(word)}
                 hasReading={segHasReading}
                 isLast={wi === seg.words.length - 1}
                 readingClass="text-[clamp(0.65rem,3svh,1rem)]"
@@ -351,6 +380,7 @@ function LyricsDisplayImpl({
               <WordToken
                 key={wi}
                 word={word}
+                presentation={presentation(word)}
                 hasReading={nextHasReading}
                 isLast={wi === nextSeg.words.length - 1}
                 readingClass="text-[clamp(0.55rem,2.25svh,0.7rem)]"

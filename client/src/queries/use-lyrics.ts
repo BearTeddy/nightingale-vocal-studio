@@ -1,4 +1,4 @@
-import { loadLyrics, searchLrclibLyrics } from "@/bridge/lyrics";
+import { loadLyrics, searchLrclibLyrics, type LyricsSearchOptions } from "@/bridge/lyrics";
 import { loadTranscript } from "@/bridge/playback";
 import type { LrclibCandidate } from "@/types/LrclibCandidate";
 import { linesFromTranscript } from "@/utils/edit-lyrics";
@@ -26,10 +26,15 @@ export const useInitialLyrics = (fileHash: string | null) =>
     staleTime: Infinity,
   });
 
-export const useLrclibCandidates = (fileHash: string | null) =>
+export const useLrclibCandidates = (
+  fileHash: string | null,
+  options?: LyricsSearchOptions,
+  revision = 0,
+) =>
   useQuery<LrclibCandidate[]>({
-    queryKey: [...LRCLIB, fileHash],
-    queryFn: () => searchLrclibLyrics(fileHash as string),
+    queryKey: [...LRCLIB, fileHash, options, revision],
+    queryFn: () => searchLrclibLyrics(fileHash as string, options),
     enabled: fileHash !== null,
     staleTime: Infinity,
+    retry: false,
   });

@@ -65,7 +65,7 @@ pub fn load_transcript(file_hash: &str) -> Result<serde_json::Value, Nightingale
     let path = resolve_transcript_path(&cache, file_hash);
     let data = std::fs::read_to_string(&path)?;
     let value = serde_json::from_str(&data)?;
-    Ok(value)
+    Ok(crate::lyric_readings::enrich(file_hash, value))
 }
 
 fn resolve_effective_key_tempo(song: &Song) -> Option<(String, f64)> {

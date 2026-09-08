@@ -12,10 +12,20 @@ export function usePlaybackTranscript(fileHash: string) {
   const [transcriptSource, setTranscriptSource] = useState("generated");
 
   useEffect(() => {
-    loadTranscript(fileHash).then((transcript: Transcript) => {
-      setSegments(splitLongSegments(transcript.segments));
-      setTranscriptSource(transcript.source ?? "generated");
-    });
+    let cancelled = false;
+    setSegments([]);
+    loadTranscript(fileHash)
+      .then((transcript: Transcript) => {
+        if (cancelled) return;
+        setSegments(splitLongSegments(transcript.segments));
+        setTranscriptSource(transcript.source ?? "generated");
+      })
+      .catch(() => {
+        if (!cancelled) setSegments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [fileHash]);
 
   return { segments, transcriptSource };

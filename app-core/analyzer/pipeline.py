@@ -120,15 +120,17 @@ def transcribe_or_align(
     """Choose between lyrics alignment and full transcription."""
     if lyrics_path and os.path.isfile(lyrics_path):
         print(f"[nightingale:LOG] Using pre-fetched lyrics: {lyrics_path}", flush=True)
-        return align_lyrics(
+        import cjk
+        return cjk.annotate_transcript(align_lyrics(
             lyrics_path, vocals_path, device,
             model_name=model_name,
             language_override=language_override,
             whisper_model=whisper_model,
             pre_align_cleanup=pre_align_cleanup,
-        )
+        ))
 
-    return transcribe_vocals(
+    import cjk
+    return cjk.annotate_transcript(transcribe_vocals(
         vocals_path, audio_path, device,
         model_name=model_name,
         beam_size=beam_size,
@@ -137,7 +139,7 @@ def transcribe_or_align(
         language_override=language_override,
         whisper_model=whisper_model,
         pre_align_cleanup=pre_align_cleanup,
-    )
+    ))
 
 
 def run_pipeline(
