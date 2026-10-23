@@ -21,6 +21,7 @@ export const addScore = async (
   songHash: string,
   score: number,
   difficulty = "medium",
+  pitchToleranceFactor = 1,
 ): Promise<void> => {
-  return await invoke<void>("add_score", { songHash, score, difficulty });
+  return await invoke<void>("add_score", { songHash, score, difficulty, pitchToleranceFactor });
 };

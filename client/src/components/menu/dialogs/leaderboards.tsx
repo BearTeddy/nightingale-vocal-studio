@@ -20,9 +20,15 @@ import { useDialog, type DialogMode } from "@/hooks/use-dialog";
 import { useDialogNav } from "@/hooks/navigation/use-dialog-nav";
 import { cn } from "@/lib/utils";
 import { useProfiles } from "@/queries/use-profiles";
+import { useConfig } from "@/queries/use-config";
+import {
+  pitchToleranceFactor,
+  scoringDifficulty,
+  scoringDifficultyProfile,
+} from "@/lib/pitch/difficulty";
 import type { ScoreRecord } from "@/types/ScoreRecord";
 import type { Song } from "@/types/Song";
-import { topScoresForSong } from "@/utils/playback/result";
+import { matchesScoringSettings, topScoresForSong } from "@/utils/playback/result";
 import { useQuery } from "@tanstack/react-query";
 import { TrophyIcon } from "lucide-react";
 import { useMemo, useRef } from "react";
@@ -86,6 +92,9 @@ function LeaderboardSongName({ song, loading, songHash }: LeaderboardSongNamePro
 export const LeaderboardsDialog = () => {
   const { mode, close } = useDialog();
   const { data: profiles } = useProfiles();
+  const { data: config } = useConfig();
+  const difficulty = scoringDifficulty(config?.scoring_difficulty);
+  const factor = pitchToleranceFactor(config?.pitch_tolerance_factor);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const displayedMode = useRetainedLeaderboardMode(mode);
@@ -94,10 +103,19 @@ export const LeaderboardsDialog = () => {
   const songMode = typeof displayedMode === "object" ? displayedMode : null;
   const scores = profiles?.scores ?? EMPTY_SCORES;
 
-  const globalBoard = useMemo(() => topScoreRecords(scores), [scores]);
+  const globalBoard = useMemo(
+    () =>
+      topScoreRecords(
+        scores.filter((record) => matchesScoringSettings(record, difficulty, factor)),
+      ),
+    [scores, difficulty, factor],
+  );
   const songBoard = useMemo(
-    () => (songMode ? topScoresForSong(scores, songMode.song.file_hash, TOP_LIMIT) : []),
-    [scores, songMode],
+    () =>
+      songMode
+        ? topScoresForSong(scores, songMode.song.file_hash, TOP_LIMIT, difficulty, factor)
+        : [],
+    [scores, songMode, difficulty, factor],
   );
   const targetSongHashes = useMemo(
     () => [...new Set(globalBoard.map((record) => record.song_hash))].sort(),
@@ -154,6 +172,7 @@ export const LeaderboardsDialog = () => {
               {globalOpen
                 ? "Top score records across every profile and song."
                 : "Best score for each profile."}
+              {` ${scoringDifficultyProfile(difficulty).label} · ${factor.toFixed(2)}× pitch window.`}
             </DialogDescription>
           </DialogHeader>
 

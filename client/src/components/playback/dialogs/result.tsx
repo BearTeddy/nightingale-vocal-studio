@@ -178,7 +178,13 @@ export const ResultDialog = ({
   const { videoExportAvailable, vocalGain } = usePlaybackMicState();
   const strictScoringAvailable = melody?.strict_scoring_available === true;
   const difficulty = scoringDifficultyProfile(performance.scoring_difficulty);
-  const board = topScoresForSong(scores, song.file_hash, TOP_LIMIT, performance.scoring_difficulty);
+  const board = topScoresForSong(
+    scores,
+    song.file_hash,
+    TOP_LIMIT,
+    performance.scoring_difficulty,
+    performance.pitch_tolerance_factor,
+  );
 
   useSpatialNavigation(dialogRef, onFinish, open);
 
@@ -213,7 +219,8 @@ export const ResultDialog = ({
               <>
                 <Stars score={score * 10} size="lg" className="mt-1" />
                 <p className="mt-1 text-xs font-medium text-muted-foreground">
-                  {difficulty.label} scoring
+                  {difficulty.label} scoring ·{" "}
+                  {(performance.pitch_tolerance_factor ?? 1).toFixed(2)}× pitch window
                 </p>
               </>
             ) : (

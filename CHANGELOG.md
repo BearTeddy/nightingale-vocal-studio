@@ -15,6 +15,7 @@ below.
 
 ### Improvements
 
+- Added a saved Hard–Easy pitch-catching factor (0.50×–2.00×) in Settings and the playback HUD. Adjusting it recalculates the current score and combo from captured pitch without restarting the microphone; scores compare only matching presets and factors. Forgiving runs remain assisted practice in learning history.
 - Lyrics search now ranks title, artist, duration, original script and overlap with supplied lyrics, offers editable search metadata, previews every candidate with its source, and avoids automatically accepting ambiguous versions.
 - Japanese playback supports original text, contextual furigana, Hepburn romaji, both guides, or romaji only. Korean supports Hangul, pronunciation-aware romanization, or both. Existing songs and timed LRC gain guides locally without repeating audio analysis.
 - The lyrics editor offers Japanese, Korean and English language overrides; supplied text retains Unicode spelling, punctuation and repeated choruses through alignment.
@@ -26,6 +27,7 @@ below.
 
 ### Fixes
 
+- Backported compatible upstream fixes: microphone startup failures are reported before capture is marked ready (17ccf81), missing tempo-scaled lyrics are regenerated after editing (df3ed7f), macOS title bars no longer query window state on every resize (1f38a96), and Whisper uses CPU when CTranslate2 has no CUDA support (1aa4674). The customized build remains on its existing architecture; this is not the full 1.3.0 migration.
 - Synced-only LRCLIB records with null plain lyrics are now usable for forced alignment. Qwen alignment restores original spelling and punctuation, rejects mismatched characters, and missing Japanese/English tokens remain visibly estimated rather than disappearing.
 - Pitch scoring no longer counts missing or clipped detector frames as sung silence, and karaoke sessions with a disabled, stalled, or fully clipped input are excluded from learning evidence.
 - Voice checkups now require signal evidence across the quiet and range stages; short bursts, timestamp stalls, and missing quiet measurements cannot validate a range or receive a perfect input score.

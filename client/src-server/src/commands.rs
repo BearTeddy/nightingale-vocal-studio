@@ -115,6 +115,7 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
                 song_hash: String,
                 score: u32,
                 difficulty: Option<String>,
+                pitch_tolerance_factor: Option<f64>,
             }
             let args: Args = deserialize(payload)?;
             let mut store = ProfileStore::load();
@@ -122,6 +123,7 @@ async fn dispatch(events: std::sync::Arc<EventBus>, name: &str, payload: Value) 
                 &args.song_hash,
                 args.score,
                 args.difficulty.as_deref().unwrap_or("medium"),
+                args.pitch_tolerance_factor.unwrap_or(1.0),
             );
             Ok(Value::Null)
         }

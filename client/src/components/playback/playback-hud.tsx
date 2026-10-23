@@ -20,6 +20,8 @@ import {
 import { computeLyricGapCaption, findCurrentSegment } from "@/utils/playback/lyrics-gap";
 import { forwardRef, memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { isPixabayTheme, themeName } from "./background";
+import { PitchToleranceControl } from "./pitch-tolerance-control";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Circle,
   Gamepad2,
@@ -348,11 +350,17 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
     performance,
     feedbackMode,
     scoringDifficulty,
+    pitchToleranceFactor,
     recordingWanted,
     recordingStatus,
   } = usePlaybackMicState();
-  const { setFeedbackMode, setScoringDifficulty, handleToggleMicMonitor, handleToggleRecording } =
-    usePlaybackMicActions();
+  const {
+    setFeedbackMode,
+    setScoringDifficulty,
+    setPitchToleranceFactor,
+    handleToggleMicMonitor,
+    handleToggleRecording,
+  } = usePlaybackMicActions();
 
   const lastSecondRef = useRef(-1);
   const timerRef = useRef<HTMLParagraphElement>(null);
@@ -461,6 +469,29 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
 
         <div className={`flex min-w-0 items-end ${hudFlowClass}`}>
           <div className="pointer-events-auto mb-1 flex items-center gap-1 border border-white/20 bg-black/45 p-1">
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Adjust pitch catching, ${pitchToleranceFactor.toFixed(2)} times forgiveness`}
+                  className="flex h-8 items-center gap-1 px-2 text-xs font-semibold text-cyan-200 hover:bg-white/10"
+                >
+                  Pitch {pitchToleranceFactor.toFixed(2)}×
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                side={position === "bottom" ? "top" : "bottom"}
+                className="w-auto border-0 bg-transparent p-0"
+              >
+                <PitchToleranceControl
+                  compact
+                  value={pitchToleranceFactor}
+                  difficulty={scoringDifficulty}
+                  onChange={setPitchToleranceFactor}
+                />
+              </PopoverContent>
+            </Popover>
             <button
               type="button"
               title={phraseLoopEnabled ? "Stop phrase loop" : "Loop current phrase"}

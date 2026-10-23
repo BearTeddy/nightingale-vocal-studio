@@ -6,6 +6,7 @@ import {
   PUSH_INTERVAL_SEC,
 } from "./constants";
 import {
+  pitchToleranceFactor,
   scoringDifficultyProfile,
   type ScoringDifficulty,
   type ScoringDifficultyProfile,
@@ -161,15 +162,21 @@ export function pitchSimilarity(
   refHz: number,
   userHz: number,
   difficulty: ScoringDifficulty = "medium",
+  factor = 1,
 ): number {
-  return centsSimilarity((freqToSemitone(userHz) - freqToSemitone(refHz)) * 100, difficulty);
+  return centsSimilarity(
+    (freqToSemitone(userHz) - freqToSemitone(refHz)) * 100,
+    difficulty,
+    factor,
+  );
 }
 
 export function centsSimilarity(
   centsOffset: number,
   difficulty: ScoringDifficulty = "medium",
+  factor = 1,
 ): number {
-  const profile = scoringDifficultyProfile(difficulty);
+  const profile = scoringDifficultyProfile(difficulty, factor);
   const distance = Math.abs(centsOffset);
   if (distance <= profile.fullCreditCents) return 1;
   if (distance >= profile.zeroCreditCents) return 0;
@@ -602,7 +609,8 @@ export function findTargetNoteAt(notes: readonly TargetNote[], time: number): Ta
 
 export class MelodyPerformanceScoring {
   private readonly notes: TargetNote[];
-  private readonly difficultyProfile: ScoringDifficultyProfile;
+  private difficultyProfile: ScoringDifficultyProfile;
+  private toleranceFactor: number;
   private readonly stats = new Map<string, NoteStats>();
   private currentStreak = 0;
   private finalizedThrough = 0;
@@ -612,8 +620,10 @@ export class MelodyPerformanceScoring {
   constructor(
     melody: MelodyMap,
     private readonly difficulty: ScoringDifficulty = "medium",
+    factor = 1,
   ) {
-    this.difficultyProfile = scoringDifficultyProfile(difficulty);
+    this.toleranceFactor = pitchToleranceFactor(factor);
+    this.difficultyProfile = scoringDifficultyProfile(difficulty, this.toleranceFactor);
     this.notes = melody.notes.filter((note) => note.eligible).sort((a, b) => a.start - b.start);
     for (const note of this.notes) {
       this.stats.set(note.id, {
@@ -627,6 +637,22 @@ export class MelodyPerformanceScoring {
         technique: [],
       });
     }
+  }
+
+  setPitchToleranceFactor(factor: number): void {
+    const next = pitchToleranceFactor(factor);
+    if (next === this.toleranceFactor) return;
+    this.toleranceFactor = next;
+    this.difficultyProfile = scoringDifficultyProfile(this.difficulty, next);
+    for (const stats of this.stats.values()) {
+      stats.similaritySum = stats.cents.reduce(
+        (sum, cents) => sum + centsSimilarity(cents, this.difficulty, next),
+        0,
+      );
+    }
+    this.currentStreak = 0;
+    this.finalizedThrough = 0;
+    if (this.lastTime != null) this.finalizePassedNotes(this.lastTime);
   }
 
   accumulate(time: number, frame: PitchFrame | null): void {
@@ -655,7 +681,7 @@ export class MelodyPerformanceScoring {
     if (frame?.voiced && frame.midi != null) {
       const cents = (frame.midi - (note.midi + note.cents / 100)) * 100;
       stats.voiced += 1;
-      stats.similaritySum += centsSimilarity(cents, this.difficulty);
+      stats.similaritySum += centsSimilarity(cents, this.difficulty, this.toleranceFactor);
       stats.firstVoicedAt ??= time;
       stats.cents.push(cents);
       if (frame.rms > 0 && frame.reference_rms != null && frame.reference_rms > 0) {
@@ -794,6 +820,7 @@ export class MelodyPerformanceScoring {
 
     return {
       scoring_difficulty: this.difficulty,
+      pitch_tolerance_factor: this.toleranceFactor,
       overall: clampScore(overall),
       legacy_score: clampScore(overall) * 10,
       phrase_accuracy: clampScore(pitch),
@@ -811,8 +838,9 @@ export function scorePitchSeries(
   series: PitchSeries,
   latencyCompensationSec = 0,
   difficulty: ScoringDifficulty = "medium",
+  factor = 1,
 ): PerformanceScore {
-  const scoring = new MelodyPerformanceScoring(melody, difficulty);
+  const scoring = new MelodyPerformanceScoring(melody, difficulty, factor);
   for (let index = 0; index < series.timestamps.length; index += 1) {
     if (series.discontinuities?.[index]) continue;
     const time = Math.max(0, (series.timestamps[index] ?? 0) - latencyCompensationSec);

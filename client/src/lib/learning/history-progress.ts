@@ -1,4 +1,9 @@
 import type { PracticeSession } from "@/types/PracticeSession";
+import {
+  pitchToleranceFactor,
+  scoringDifficulty,
+  scoringDifficultyProfile,
+} from "@/lib/pitch/difficulty";
 import { summarizePitchInputEvidence, type PitchSeries } from "@/lib/pitch/state";
 import { LEARNING_STAGES, STARTER_LESSONS } from "./catalog";
 import { createSkillProgress, updateSkillProgress } from "./progress";
@@ -26,6 +31,8 @@ interface ExercisePayload {
     lessonId?: unknown;
   };
   overall?: unknown;
+  scoring_difficulty?: string;
+  pitch_tolerance_factor?: number;
   completion?: unknown;
   feedback_mode?: unknown;
   phrases?: unknown;
@@ -148,7 +155,19 @@ export function buildLearningProgressFromHistory(
         payload?.completion === "completed" &&
         phraseCount >= 3 &&
         karaokePitchInputIsValid(payload);
-      assistPreset = payload?.feedback_mode === "game" ? "independent" : "guided";
+      const scoring = scoringDifficultyProfile(
+        scoringDifficulty(payload?.scoring_difficulty),
+        pitchToleranceFactor(payload?.pitch_tolerance_factor),
+      );
+      const assistedScoring =
+        scoring.fullCreditCents > 25 ||
+        scoring.zeroCreditCents > 100 ||
+        scoring.noteHitThreshold < 0.75;
+      assistPreset = assistedScoring
+        ? "full"
+        : payload?.feedback_mode === "game"
+          ? "independent"
+          : "guided";
       lessonId = "song-phrases.short-phrase-transfer";
       kind = "transfer";
       targetId = session.song_hash ?? undefined;

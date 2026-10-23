@@ -4,6 +4,7 @@ import { windowImmersive } from "@/bridge/window";
 import { isTauri } from "./runtime";
 
 let cachedTauriWindow: ReturnType<typeof getCurrentWindow> | null = null;
+export const FULLSCREEN_CHANGE_EVENT = "nightingale-fullscreen-change";
 
 const tauriWindow = () => {
   if (cachedTauriWindow === null) cachedTauriWindow = getCurrentWindow();
@@ -36,4 +37,5 @@ export const setFullScreen = async (next: boolean): Promise<void> => {
     return;
   }
   await tauriWindow().setSimpleFullscreen(next);
+  window.dispatchEvent(new Event(FULLSCREEN_CHANGE_EVENT));
 };

@@ -12,6 +12,20 @@ pub struct ScoreRecord {
     pub played_at: u64,
     #[serde(default = "default_scoring_difficulty")]
     pub difficulty: String,
+    #[serde(default = "default_pitch_tolerance_factor")]
+    pub pitch_tolerance_factor: f64,
+}
+
+fn default_pitch_tolerance_factor() -> f64 {
+    1.0
+}
+
+pub fn normalized_pitch_tolerance_factor(value: f64) -> f64 {
+    if value.is_finite() {
+        (value.clamp(0.5, 2.0) * 20.0).round() / 20.0
+    } else {
+        1.0
+    }
 }
 
 fn default_scoring_difficulty() -> String {
@@ -122,7 +136,7 @@ impl ProfileStore {
         self.save();
     }
 
-    pub fn add_score(&mut self, song_hash: &str, score: u32, difficulty: &str) {
+    pub fn add_score(&mut self, song_hash: &str, score: u32, difficulty: &str, factor: f64) {
         let profile = match &self.active {
             Some(p) => p.clone(),
             None => return,
@@ -136,6 +150,7 @@ impl ProfileStore {
             song_hash: song_hash.to_string(),
             score,
             played_at,
+            pitch_tolerance_factor: normalized_pitch_tolerance_factor(factor),
             difficulty: match difficulty {
                 "easy" | "pro" => difficulty.to_string(),
                 _ => default_scoring_difficulty(),
@@ -184,6 +199,24 @@ mod tests {
         .expect("legacy score should deserialize");
 
         assert_eq!(record.difficulty, "medium");
+        assert_eq!(record.pitch_tolerance_factor, 1.0);
+    }
+
+    #[test]
+    fn pitch_tolerance_is_bounded_and_round_trips() {
+        use super::normalized_pitch_tolerance_factor as normalize;
+        assert_eq!(normalize(f64::NAN), 1.0);
+        assert_eq!(normalize(-2.0), 0.5);
+        assert_eq!(normalize(9.0), 2.0);
+        assert_eq!(normalize(1.23), 1.25);
+        let record: ScoreRecord = serde_json::from_str(r#"{"profile":"Guest","song_hash":"song","score":800,"played_at":1,"difficulty":"pro","pitch_tolerance_factor":1.25}"#).unwrap();
+        let saved = serde_json::to_string(&record).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ScoreRecord>(&saved)
+                .unwrap()
+                .pitch_tolerance_factor,
+            1.25
+        );
     }
 
     #[test]

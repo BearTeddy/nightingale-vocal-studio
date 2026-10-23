@@ -16,6 +16,7 @@ export type PhraseScore = {
 
 export type PerformanceScore = {
   scoring_difficulty: ScoringDifficulty;
+  pitch_tolerance_factor?: number;
   overall: number;
   legacy_score: number;
   phrase_accuracy: number;

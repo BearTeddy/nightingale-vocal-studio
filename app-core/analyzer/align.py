@@ -8,7 +8,7 @@ import cjk
 from audio import detect_vocal_region
 from gpu import gpu_model
 from language import detect_language_multiwindow
-from whisper_compat import progress, align_device_for, compute_type_for, align_with_fallback, get_align_backend
+from whisper_compat import progress, align_device_for, compute_type_for, align_with_fallback, get_align_backend, load_whisper_model
 
 
 def align_lyrics(
@@ -65,8 +65,8 @@ def align_lyrics(
     else:
         progress(58, "Detecting language...")
         with gpu_model(f"whisper:{model_name}:lang_detect") as held:
-            model = whisperx.load_model(
-                model_name, a_device, compute_type=c_type, task="transcribe",
+            model = load_whisper_model(
+                model_name, a_device, c_type, task="transcribe",
             )
             held.append(model)
             language = detect_language_multiwindow(model, audio)

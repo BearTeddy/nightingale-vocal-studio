@@ -16,6 +16,7 @@ import {
   scoringDifficulty,
   scoringDifficultyProfile,
   type ScoringDifficulty,
+  pitchToleranceFactor,
 } from "@/lib/pitch/difficulty";
 import type { PitchSeries } from "@/lib/pitch/state";
 import { transformMelodyMap } from "@/lib/pitch/melody";
@@ -90,6 +91,7 @@ export interface PlaybackMicState {
   videoExportAvailable: boolean;
   feedbackMode: "coach" | "game";
   scoringDifficulty: ScoringDifficulty;
+  pitchToleranceFactor: number;
 }
 
 export interface PlaybackMicActions {
@@ -105,6 +107,7 @@ export interface PlaybackMicActions {
   exportRecordingVideo: () => void;
   setFeedbackMode: (mode: "coach" | "game") => void;
   setScoringDifficulty: (difficulty: ScoringDifficulty) => void;
+  setPitchToleranceFactor: (factor: number) => void;
 }
 
 const MicStateContext = createContext<PlaybackMicState | null>(null);
@@ -154,6 +157,9 @@ export function PlaybackMicProvider({
   const [feedbackMode, setFeedbackMode] = useState<"coach" | "game">("coach");
   const [selectedScoringDifficulty, setSelectedScoringDifficulty] = useState<ScoringDifficulty>(
     () => scoringDifficulty(config?.scoring_difficulty),
+  );
+  const [selectedPitchTolerance, setSelectedPitchTolerance] = useState(() =>
+    pitchToleranceFactor(config?.pitch_tolerance_factor),
   );
   const [performanceSeries, setPerformanceSeries] = useState<PitchSeries>({
     refPitches: [],
@@ -248,6 +254,7 @@ export function PlaybackMicProvider({
       melody,
       config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
       selectedScoringDifficulty,
+      selectedPitchTolerance,
     );
   const getPitchInputEvidenceRef = useRef(getPitchInputEvidence);
   performanceRef.current = performance;
@@ -716,6 +723,16 @@ export function PlaybackMicProvider({
     [getCurrentTime, isFinished, persistConfig, selectedScoringDifficulty],
   );
 
+  const changePitchTolerance = useCallback(
+    (factor: number) => {
+      if (isFinished) return;
+      const next = pitchToleranceFactor(factor);
+      setSelectedPitchTolerance(next);
+      persistConfig({ pitch_tolerance_factor: next });
+    },
+    [isFinished, persistConfig],
+  );
+
   const handleToggleRecording = useCallback(() => {
     setRecordingWanted((current) => {
       const next = !current;
@@ -855,6 +872,7 @@ export function PlaybackMicProvider({
       videoExportAvailable: videoPath != null,
       feedbackMode,
       scoringDifficulty: selectedScoringDifficulty,
+      pitchToleranceFactor: selectedPitchTolerance,
     };
   }, [
     micUserEnabled,
@@ -878,6 +896,7 @@ export function PlaybackMicProvider({
     videoPath,
     feedbackMode,
     selectedScoringDifficulty,
+    selectedPitchTolerance,
   ]);
 
   const actionsValue = useMemo<PlaybackMicActions>(
@@ -894,6 +913,7 @@ export function PlaybackMicProvider({
       exportRecordingVideo,
       setFeedbackMode,
       setScoringDifficulty: changeScoringDifficulty,
+      setPitchToleranceFactor: changePitchTolerance,
     }),
     [
       reactiveRef,
@@ -908,6 +928,7 @@ export function PlaybackMicProvider({
       exportRecordingVideo,
       setFeedbackMode,
       changeScoringDifficulty,
+      changePitchTolerance,
     ],
   );
 

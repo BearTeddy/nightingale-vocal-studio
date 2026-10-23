@@ -1,13 +1,13 @@
 use crate::monitor::{
-    stream_buffer_size, MonitorMode, MonitorProcessor, MonitorRing, MonitorTelemetry,
-    DEFAULT_MONITOR_GAIN, MAX_MONITOR_GAIN,
+    DEFAULT_MONITOR_GAIN, MAX_MONITOR_GAIN, MonitorMode, MonitorProcessor, MonitorRing,
+    MonitorTelemetry, stream_buffer_size,
 };
 use crate::native_pitch::{NativePitchFrame, NativePitchTracker};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use tauri::ipc::Channel;
@@ -522,7 +522,20 @@ fn find_device(preferred: Option<&str>) -> Result<(cpal::Device, String), String
 }
 
 #[tauri::command]
-pub fn start_mic_capture(
+pub async fn start_mic_capture(
+    preferred: Option<String>,
+    options: Option<MicCaptureOptions>,
+    on_samples: Channel<MicSampleFrame>,
+    on_pitch: Channel<NativePitchFrame>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        start_mic_capture_inner(preferred, options, on_samples, on_pitch)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn start_mic_capture_inner(
     preferred: Option<String>,
     options: Option<MicCaptureOptions>,
     on_samples: Channel<MicSampleFrame>,
@@ -563,14 +576,27 @@ pub fn start_mic_capture(
 
     let device_name = name.clone();
     let shutdown = Arc::clone(&MIC_SHUTDOWN);
-
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
-        run_mic_loop(device, &name, shutdown, monitor_mode);
+        run_mic_loop(device, &name, shutdown, monitor_mode, startup_tx);
         MIC_RUNNING.store(false, Ordering::SeqCst);
     });
 
     if let Ok(mut slot) = MIC_THREAD.lock() {
         *slot = Some(handle);
+    }
+
+    match startup_rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(Ok(())) => {}
+        result => {
+            MIC_SHUTDOWN.store(true, Ordering::SeqCst);
+            MONITOR_ENABLED.store(false, Ordering::SeqCst);
+            return Err(match result {
+                Ok(Err(error)) => error,
+                Err(error) => format!("Microphone failed to start: {error}"),
+                Ok(Ok(())) => unreachable!(),
+            });
+        }
     }
 
     Ok(device_name)
@@ -899,11 +925,15 @@ fn run_mic_loop(
     name: &str,
     shutdown: Arc<AtomicBool>,
     monitor_mode: MonitorMode,
+    startup: std::sync::mpsc::Sender<Result<(), String>>,
 ) {
     let default_cfg = match device.default_input_config() {
         Ok(c) => c,
         Err(e) => {
             warn!("[mic] '{name}' config error: {e}");
+            let _ = startup.send(Err(format!(
+                "Microphone '{name}' configuration failed: {e}"
+            )));
             return;
         }
     };
@@ -933,6 +963,7 @@ fn run_mic_loop(
         Arc::clone(&monitor_ring),
     ) else {
         warn!("[mic] failed to open '{name}'");
+        let _ = startup.send(Err(format!("Failed to open microphone '{name}'")));
         return;
     };
     // Keep the silent output stream alive with the mic so Monitor can toggle
@@ -947,6 +978,9 @@ fn run_mic_loop(
     }
 
     info!("[mic] active: {name}");
+    if startup.send(Ok(())).is_err() {
+        return;
+    }
 
     let sleep_dur = std::time::Duration::from_millis(4);
     let mut sample_index = 0u64;
@@ -1019,8 +1053,8 @@ pub fn stop_mic_capture() {
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_chunk, find_device, recording_completion_error, sync_channel, try_build_stream,
-        write_recording_stream, PCM_QUEUE_CAP, RECORDING_QUEUE_CHUNKS,
+        PCM_QUEUE_CAP, RECORDING_QUEUE_CHUNKS, drain_chunk, find_device,
+        recording_completion_error, sync_channel, try_build_stream, write_recording_stream,
     };
     use crate::monitor::{MonitorRing, MonitorTelemetry};
     use crate::native_pitch::NativePitchTracker;

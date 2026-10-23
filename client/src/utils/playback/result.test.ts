@@ -10,9 +10,17 @@ const records: ScoreRecord[] = [
   { profile: "B", song_hash: "song", score: 910, played_at: 3n, difficulty: "medium" },
   { profile: "A", song_hash: "other", score: 990, played_at: 4n, difficulty: "medium" },
   { profile: "A", song_hash: "song", score: 990, played_at: 5n, difficulty: "easy" },
-];
+].map((record) => ({ ...record, pitch_tolerance_factor: 1 }));
 
 describe("playback result", () => {
+  it("compares only matching pitch windows and keeps legacy default scores", () => {
+    const mixed = [...records, { ...records[0], score: 990, pitch_tolerance_factor: 2 }];
+    expect(personalBestForRun(mixed, "song", "A", 850, "medium", 1).previousScore).toBe(82);
+    expect(personalBestForRun(mixed, "song", "A", 850, "medium", 2).previousScore).toBe(99);
+    expect(topScoresForSong(mixed, "song", 5, "medium", 2)).toEqual([{ profile: "A", score: 990 }]);
+    const legacy = { ...records[0], pitch_tolerance_factor: undefined } as unknown as ScoreRecord;
+    expect(topScoresForSong([legacy], "song", 5)).toEqual([{ profile: "A", score: 760 }]);
+  });
   it("never awards a fallback score without eligible melody targets", () => {
     const performance = { legacy_score: 860 } as PerformanceScore;
     const unavailable = { strict_scoring_available: false } as MelodyMap;

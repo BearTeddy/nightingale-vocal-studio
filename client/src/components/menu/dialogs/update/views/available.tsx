@@ -33,9 +33,14 @@ export const availableView = ({ ctx, update, onClose, onInstall }: Args): ViewPa
   const notes = update.body?.trim();
 
   return {
-    description: "A new version of Nightingale is available.",
+    description:
+      "An official Nightingale release is available. This is a customized Vocal Studio build.",
     body: (
       <div className="flex flex-col gap-3">
+        <p className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs">
+          Installing the official release replaces your custom learning, scoring, and karaoke
+          features. To keep them, update your Vocal Studio fork instead.
+        </p>
         <div className="flex items-start gap-2">
           <DownloadIcon className="size-4 text-primary shrink-0 mt-0.5" />
           <div className="flex flex-col gap-0.5">

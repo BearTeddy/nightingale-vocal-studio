@@ -70,6 +70,36 @@ const melody = (eligible = true): MelodyMap => ({
 });
 
 describe("strict pitch scoring", () => {
+  it("recalculates prior pitch hits without changing measured pitch or counting missing input", () => {
+    const scoring = new MelodyPerformanceScoring(melody(), "medium", 0.5);
+    scoring.accumulate(0, frame(69.4));
+    scoring.accumulate(0.1, frame(69.4));
+    scoring.accumulate(0.2, null);
+    scoring.accumulate(0.3, clippedFrame());
+    scoring.accumulate(1.1, null);
+    const hard = scoring.snapshot();
+    expect(hard.streak).toBe(0);
+    scoring.setPitchToleranceFactor(2);
+    const easy = scoring.snapshot();
+    expect(easy.phrase_accuracy).toBe(100);
+    expect(easy.streak).toBe(1);
+    expect(easy.pitch_tolerance_factor).toBe(2);
+    expect(easy.categories.filter((category) => category.key !== "pitch")).toEqual(
+      hard.categories.filter((category) => category.key !== "pitch"),
+    );
+    scoring.setPitchToleranceFactor(0.5);
+    expect(scoring.snapshot()).toEqual(hard);
+  });
+
+  it("keeps real silence at zero and octave errors outside even the widest window", () => {
+    const scoring = new MelodyPerformanceScoring(melody(), "easy", 2);
+    scoring.accumulate(0, silentFrame());
+    scoring.setPitchToleranceFactor(1.5);
+    expect(scoring.snapshot().phrase_accuracy).toBe(0);
+    expect(centsSimilarity(1200, "easy", 2)).toBe(0);
+    expect(centsSimilarity(40, "medium", 2)).toBe(1);
+    expect(centsSimilarity(40, "medium", 0.5)).toBeLessThan(0.3);
+  });
   it("steadies ordinary input wobble in the visual tracker", () => {
     const tracker = new VisualPitchTracker();
     const rawMidi = [69, 69.25, 68.75, 69.2, 68.8, 69.1];

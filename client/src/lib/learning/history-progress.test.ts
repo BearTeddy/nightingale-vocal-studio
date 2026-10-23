@@ -45,6 +45,23 @@ function karaokeSession(
 }
 
 describe("learning progress from practice history", () => {
+  it("keeps forgiving performances as practice instead of independent mastery", () => {
+    const progress = buildLearningProgressFromHistory(
+      [
+        karaokeSession("second", 100_000, "song-b", 99, "game", "completed", {
+          pitch_tolerance_factor: 2,
+        }),
+        karaokeSession("first", 1_000, "song-a", 99, "game", "completed", {
+          pitch_tolerance_factor: 2,
+        }),
+      ],
+      true,
+    );
+    expect(progress.find((item) => item.skillId === "performance.consistency")?.mastery).toBe(
+      "practicing",
+    );
+    expect(progress.find((item) => item.skillId === "song.phrase")?.mastery).toBe("practicing");
+  });
   it("uses a completed checkup to finish setup without assigning a voice type", () => {
     const progress = buildLearningProgressFromHistory([], true);
     expect(progress.find((item) => item.skillId === "setup.calibration")?.mastery).toBe(

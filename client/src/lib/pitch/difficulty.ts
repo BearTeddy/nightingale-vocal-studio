@@ -1,5 +1,14 @@
 export type ScoringDifficulty = "easy" | "medium" | "pro";
 
+export const MIN_PITCH_TOLERANCE_FACTOR = 0.5;
+export const MAX_PITCH_TOLERANCE_FACTOR = 2;
+export const PITCH_TOLERANCE_FACTOR_STEP = 0.05;
+
+export function pitchToleranceFactor(value?: number | null): number {
+  if (value == null || !Number.isFinite(value)) return 1;
+  return Math.round(Math.min(2, Math.max(0.5, value)) * 20) / 20;
+}
+
 export interface ScoringDifficultyProfile {
   id: ScoringDifficulty;
   label: string;
@@ -56,6 +65,15 @@ export function nextScoringDifficulty(current: ScoringDifficulty): ScoringDiffic
   return SCORING_DIFFICULTIES[(index + 1) % SCORING_DIFFICULTIES.length];
 }
 
-export function scoringDifficultyProfile(difficulty: ScoringDifficulty): ScoringDifficultyProfile {
-  return SCORING_DIFFICULTY_PROFILES[difficulty];
+export function scoringDifficultyProfile(
+  difficulty: ScoringDifficulty,
+  factor = 1,
+): ScoringDifficultyProfile {
+  const profile = SCORING_DIFFICULTY_PROFILES[difficulty];
+  const tolerance = pitchToleranceFactor(factor);
+  return {
+    ...profile,
+    fullCreditCents: profile.fullCreditCents * tolerance,
+    zeroCreditCents: profile.zeroCreditCents * tolerance,
+  };
 }

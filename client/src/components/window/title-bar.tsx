@@ -1,5 +1,9 @@
 import { minimizeWindow, triggerFrontendReady, windowImmersive } from "@/bridge/window";
-import { isFullScreen as tauriIsFullScreen, setFullScreen } from "@/bridge/fullScreen";
+import {
+  FULLSCREEN_CHANGE_EVENT,
+  isFullScreen as tauriIsFullScreen,
+  setFullScreen,
+} from "@/bridge/fullScreen";
 import { loadConfig, saveConfig } from "@/bridge/config";
 import { isTauri } from "@/bridge/runtime";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -45,36 +49,19 @@ function TitleBar() {
   const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
-    const win = getCurrentWindow();
-
-    const sync = async () => {
-      setFullscreen(await windowImmersive());
+    let disposed = false;
+    const sync = () => {
+      void windowImmersive()
+        .then((value) => {
+          if (!disposed) setFullscreen(value);
+        })
+        .catch(() => {});
     };
-
-    void sync();
-
-    let unlistenResize: (() => void) | undefined;
-    let unlistenFocus: (() => void) | undefined;
-
-    void win
-      .onResized(() => {
-        void sync();
-      })
-      .then((fn) => {
-        unlistenResize = fn;
-      });
-
-    void win
-      .onFocusChanged(() => {
-        void sync();
-      })
-      .then((fn) => {
-        unlistenFocus = fn;
-      });
-
+    sync();
+    window.addEventListener(FULLSCREEN_CHANGE_EVENT, sync);
     return () => {
-      unlistenResize?.();
-      unlistenFocus?.();
+      disposed = true;
+      window.removeEventListener(FULLSCREEN_CHANGE_EVENT, sync);
     };
   }, []);
 

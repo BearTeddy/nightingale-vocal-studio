@@ -39,12 +39,15 @@ export function usePitchScoring(
   melody: MelodyMap | null,
   latencyCompensationSec = DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
   difficulty: ScoringDifficulty = "medium",
+  toleranceFactor = 1,
 ) {
   const bufferRef = useRef(new PitchStateBuffer());
   const melodyScoringRef = useRef<MelodyPerformanceScoring | null>(null);
   const micFrameRef = useRef(micFrame);
   const melodyRef = useRef(melody);
   const latencyRef = useRef(latencyCompensationSec);
+  const toleranceRef = useRef(toleranceFactor);
+  toleranceRef.current = toleranceFactor;
   const referenceDetectorRef = useRef(createPitchDetector());
   const referenceWindowRef = useRef(new Float32Array(PITCH_WINDOW_SAMPLES));
   const referencePitchRef = useRef<{
@@ -71,7 +74,7 @@ export function usePitchScoring(
   });
   const [score, setScore] = useState(0);
   const [performance, setPerformance] = useState<PerformanceScore>(() =>
-    emptyPerformance(difficulty),
+    emptyPerformance(difficulty, toleranceFactor),
   );
 
   micFrameRef.current = micFrame;
@@ -104,13 +107,29 @@ export function usePitchScoring(
     };
 
     melodyScoringRef.current = melody?.strict_scoring_available
-      ? new MelodyPerformanceScoring(melody, difficulty)
+      ? new MelodyPerformanceScoring(melody, difficulty, toleranceRef.current)
       : null;
 
     setSeries(bufferRef.current.snapshot());
     setScore(0);
-    setPerformance(emptyPerformance(difficulty));
+    setPerformance(emptyPerformance(difficulty, toleranceRef.current));
   }, [difficulty, duration, isReady, melody]);
+
+  useEffect(() => {
+    const scoring = melodyScoringRef.current;
+    if (!scoring) return;
+    scoring.setPitchToleranceFactor(toleranceFactor);
+    const next = scoring.snapshot();
+    setPerformance(next);
+    setScore(next.legacy_score);
+    const dense = denseSeriesRef.current;
+    dense.similarities = dense.refPitches.map((reference, index) => {
+      const user = dense.userPitches[index];
+      return reference != null && user != null
+        ? pitchSimilarity(reference, user, difficulty, toleranceFactor)
+        : 0;
+    });
+  }, [difficulty, toleranceFactor]);
 
   useEffect(() => {
     if (!isReady) {
@@ -142,7 +161,10 @@ export function usePitchScoring(
       if (melodyScoring && melodyRef.current) {
         const note = findTargetNoteAt(melodyRef.current.notes, scoringTime);
         const refHz = note ? midiToFreq(note.midi + note.cents / 100) : null;
-        const sim = refHz != null && mp != null ? pitchSimilarity(refHz, mp, difficulty) : 0;
+        const sim =
+          refHz != null && mp != null
+            ? pitchSimilarity(refHz, mp, difficulty, toleranceRef.current)
+            : 0;
         bufferRef.current.tryPush(refHz, mp, sim, t, frame?.sample_index);
         if (shouldProcessFrame) {
           const referenceBuffer = getReferenceBuffer();
@@ -232,9 +254,10 @@ export function usePitchScoring(
   return { series, score, performance, getPerformanceSeries, getPitchInputEvidence };
 }
 
-function emptyPerformance(difficulty: ScoringDifficulty): PerformanceScore {
+function emptyPerformance(difficulty: ScoringDifficulty, factor = 1): PerformanceScore {
   return {
     scoring_difficulty: difficulty,
+    pitch_tolerance_factor: factor,
     overall: 0,
     legacy_score: 0,
     phrase_accuracy: 0,

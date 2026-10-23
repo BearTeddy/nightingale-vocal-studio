@@ -74,6 +74,22 @@ def compute_type_for(device: str) -> str:
     return "int8"
 
 
+def load_whisper_model(model_name, device, compute_type, **kwargs):
+    """Fall back to CPU if the installed CTranslate2 has no CUDA support."""
+    import whisperx
+
+    if device == "cuda":
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() == 0:
+            print(
+                "[nightingale:LOG] CTranslate2 has no CUDA support; running Whisper on CPU (int8)",
+                flush=True,
+            )
+            device, compute_type = "cpu", "int8"
+    return whisperx.load_model(model_name, device, compute_type=compute_type, **kwargs)
+
+
 def is_oom(err):
     lower = str(err).lower()
     return "out of memory" in lower or "outofmemoryerror" in lower

@@ -36,6 +36,8 @@ import {
   SettingsSelect,
 } from "@/components/menu/settings/settings-controls";
 import { useSettingsNavigation } from "@/hooks/navigation/use-settings-navigation";
+import { PitchToleranceControl } from "@/components/playback/pitch-tolerance-control";
+import { pitchToleranceFactor, scoringDifficulty } from "@/lib/pitch/difficulty";
 
 const DEFAULT_MIC_ID = "__default__";
 
@@ -57,6 +59,18 @@ export const SettingsPage = () => {
   const [vocalThresholdPct, setVocalThresholdPct] = useState(
     config?.vocal_detection_threshold_pct ?? DEFAULTS.vocal_detection_threshold_pct,
   );
+  const [pitchTolerance, setPitchTolerance] = useState(
+    pitchToleranceFactor(config?.pitch_tolerance_factor),
+  );
+  useEffect(
+    () => setPitchTolerance(pitchToleranceFactor(config?.pitch_tolerance_factor)),
+    [config?.pitch_tolerance_factor],
+  );
+  const updatePitchTolerance = (factor: number) => {
+    const next = pitchToleranceFactor(factor);
+    setPitchTolerance(next);
+    mutate({ pitch_tolerance_factor: next });
+  };
 
   const close = () => navigate("/");
   const asrEngine = config?.asr_engine ?? DEFAULTS.asr_engine;
@@ -124,6 +138,7 @@ export const SettingsPage = () => {
     setMicMonitorGain(DEFAULTS.mic_monitor_gain);
     setMicLatencySec(DEFAULTS.mic_latency_compensation_sec);
     setVocalThresholdPct(DEFAULTS.vocal_detection_threshold_pct);
+    setPitchTolerance(DEFAULTS.pitch_tolerance_factor);
   };
 
   const { footerSegment, getFocusClassName, syncFocusFromElement } = useSettingsNavigation({
@@ -133,11 +148,13 @@ export const SettingsPage = () => {
     micMonitorGain,
     micLatencySec,
     vocalThresholdPct,
+    pitchTolerance,
     onBack: close,
     onTabChange: setTab,
     onMicMonitorGainChange: updateMicMonitorGain,
     onMicLatencyChange: updateMicLatency,
     onVocalThresholdChange: updateVocalThreshold,
+    onPitchToleranceChange: updatePitchTolerance,
   });
 
   return (
@@ -200,6 +217,15 @@ export const SettingsPage = () => {
                   onValueChange={(value) =>
                     mutate({ preferred_mic: value === DEFAULT_MIC_ID ? null : value })
                   }
+                />
+              </Field>
+
+              <Field>
+                <PitchToleranceControl
+                  value={pitchTolerance}
+                  difficulty={scoringDifficulty(config?.scoring_difficulty)}
+                  onChange={updatePitchTolerance}
+                  className={getFocusClassName(NAV.general.pitchTolerance)}
                 />
               </Field>
 

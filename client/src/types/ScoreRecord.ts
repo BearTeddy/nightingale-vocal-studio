@@ -6,4 +6,5 @@ export type ScoreRecord = {
   score: number;
   played_at: bigint;
   difficulty: string;
+  pitch_tolerance_factor: number;
 };

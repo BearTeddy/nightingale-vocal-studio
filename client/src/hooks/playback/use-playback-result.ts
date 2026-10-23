@@ -100,11 +100,17 @@ export function usePlaybackResult(song: Song): PlaybackResult {
                 active,
                 finalScore,
                 performance.scoring_difficulty,
+                performance.pitch_tolerance_factor,
               )
             : null,
         );
         if (active != null && finalScore > 0) {
-          await addScore(fileHash, finalScore, performance.scoring_difficulty);
+          await addScore(
+            fileHash,
+            finalScore,
+            performance.scoring_difficulty,
+            performance.pitch_tolerance_factor,
+          );
           await queryClient.invalidateQueries({ queryKey: PROFILES });
         }
         setResultScore(performance.overall);

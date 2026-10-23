@@ -7,7 +7,7 @@ from audio import detect_vocal_region, highpass_filter, normalize_rms
 from gpu import gpu_model, hard_free_gpu
 from hallucination import is_hallucination, remove_hallucinated_words
 from language import detect_language_multiwindow
-from whisper_compat import progress, align_with_fallback, get_align_backend
+from whisper_compat import progress, align_with_fallback, get_align_backend, load_whisper_model
 
 
 def transcribe_vocals(
@@ -182,16 +182,16 @@ def _transcribe_whisper(
             language = language_override
             print(f"[nightingale:LOG] Using language override: '{language}'", flush=True)
             progress(59, f"Language override: {language}")
-            model = whisperx.load_model(
-                model_name, device, compute_type=compute_type,
+            model = load_whisper_model(
+                model_name, device, compute_type,
                 task="transcribe", language=language,
                 asr_options=no_vad_asr,
             )
             held.append(model)
         else:
             progress(58, "Detecting language from vocals (multi-window)...")
-            model = whisperx.load_model(
-                model_name, device, compute_type=compute_type,
+            model = load_whisper_model(
+                model_name, device, compute_type,
                 task="transcribe", asr_options=no_vad_asr,
             )
             held.append(model)
@@ -235,8 +235,8 @@ def _transcribe_parakeet_or_fallback(
         if pre_align_cleanup:
             pre_align_cleanup()
         with gpu_model("whisper-tiny:lang_detect") as held:
-            tiny = whisperx.load_model(
-                "tiny", device, compute_type=compute_type, task="transcribe",
+            tiny = load_whisper_model(
+                "tiny", device, compute_type, task="transcribe",
             )
             held.append(tiny)
             language = detect_language_multiwindow(tiny, full_audio)

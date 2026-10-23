@@ -2,6 +2,7 @@ import { DIALOG_FOCUSABLE_SELECTOR, useDialogNav } from "@/hooks/navigation/use-
 import { cn } from "@/lib/utils";
 import type { RefObject } from "react";
 import { useMemo } from "react";
+import { pitchToleranceFactor, PITCH_TOLERANCE_FACTOR_STEP } from "@/lib/pitch/difficulty";
 import {
   MIC_LATENCY_MAX,
   MIC_LATENCY_STEP,
@@ -46,11 +47,13 @@ interface UseSettingsNavigationOptions {
   micMonitorGain: number;
   micLatencySec: number;
   vocalThresholdPct: number;
+  pitchTolerance: number;
   onBack: () => void;
   onTabChange: (tab: SettingsTab) => void;
   onMicMonitorGainChange: (gain: number) => void;
   onMicLatencyChange: (latencySec: number) => void;
   onVocalThresholdChange: (pct: number) => void;
+  onPitchToleranceChange: (factor: number) => void;
 }
 
 export function useSettingsNavigation({
@@ -60,11 +63,13 @@ export function useSettingsNavigation({
   micMonitorGain,
   micLatencySec,
   vocalThresholdPct,
+  pitchTolerance,
   onBack,
   onTabChange,
   onMicMonitorGainChange,
   onMicLatencyChange,
   onVocalThresholdChange,
+  onPitchToleranceChange,
 }: UseSettingsNavigationOptions) {
   const stops = useMemo(() => getSettingsStops(tab, isParakeet), [tab, isParakeet]);
   const itemCount = useMemo(() => stops.reduce((sum, size) => sum + size, 0), [stops]);
@@ -83,6 +88,16 @@ export function useSettingsNavigation({
       }
 
       if (!action.left && !action.right) return false;
+
+      if (tab === "general" && segment === NAV.general.pitchTolerance) {
+        onPitchToleranceChange(
+          pitchToleranceFactor(
+            pitchTolerance +
+              (action.right ? PITCH_TOLERANCE_FACTOR_STEP : -PITCH_TOLERANCE_FACTOR_STEP),
+          ),
+        );
+        return true;
+      }
 
       if (tab === "general" && segment === NAV.general.micMonitorGain) {
         const delta = action.right ? MIC_MONITOR_GAIN_STEP : -MIC_MONITOR_GAIN_STEP;

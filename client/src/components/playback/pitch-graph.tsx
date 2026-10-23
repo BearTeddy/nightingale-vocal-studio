@@ -344,6 +344,7 @@ export function PitchGraph({ series, position = "top" }: PitchGraphProps) {
     performance,
     feedbackMode,
     scoringDifficulty,
+    pitchToleranceFactor,
   } = usePlaybackMicState();
   const { subscribe, getCurrentTime } = usePlaybackTransportActions();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -471,7 +472,10 @@ export function PitchGraph({ series, position = "top" }: PitchGraphProps) {
   if (!guideVisible) return null;
 
   const cents = performance.cents_offset;
-  const centeredCents = scoringDifficultyProfile(scoringDifficulty).fullCreditCents;
+  const centeredCents = scoringDifficultyProfile(
+    scoringDifficulty,
+    pitchToleranceFactor,
+  ).fullCreditCents;
   const pitchMessage =
     cents == null
       ? "Listen for the next note"

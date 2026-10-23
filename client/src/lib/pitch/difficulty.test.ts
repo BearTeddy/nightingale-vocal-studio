@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { nextScoringDifficulty, scoringDifficulty, scoringDifficultyProfile } from "./difficulty";
+import {
+  nextScoringDifficulty,
+  pitchToleranceFactor,
+  scoringDifficulty,
+  scoringDifficultyProfile,
+} from "./difficulty";
 
 describe("scoring difficulty", () => {
+  it("bounds and quantizes custom forgiveness with safe legacy defaults", () => {
+    expect(pitchToleranceFactor(null)).toBe(1);
+    expect(pitchToleranceFactor(NaN)).toBe(1);
+    expect(pitchToleranceFactor(Infinity)).toBe(1);
+    expect(pitchToleranceFactor(-10)).toBe(0.5);
+    expect(pitchToleranceFactor(10)).toBe(2);
+    expect(pitchToleranceFactor(1.23)).toBe(1.25);
+  });
+
+  it("scales only the pitch window and leaves timing and stability honest", () => {
+    const hard = scoringDifficultyProfile("medium", 0.5);
+    const easy = scoringDifficultyProfile("medium", 2);
+    expect(hard.fullCreditCents).toBe(12.5);
+    expect(easy.fullCreditCents).toBe(50);
+    expect(hard.zeroCreditCents).toBe(50);
+    expect(easy.zeroCreditCents).toBe(200);
+    expect(hard.timingPenaltyPerSecond).toBe(easy.timingPenaltyPerSecond);
+    expect(hard.stabilityPenalty).toBe(easy.stabilityPenalty);
+  });
   it("falls back to medium for old or invalid config values", () => {
     expect(scoringDifficulty(null)).toBe("medium");
     expect(scoringDifficulty("unknown")).toBe("medium");

@@ -1,7 +1,22 @@
 import type { MelodyMap } from "@/types/MelodyMap";
 import type { PerformanceScore } from "@/types/PerformanceScore";
 import type { ScoreRecord } from "@/types/ScoreRecord";
-import { scoringDifficulty, type ScoringDifficulty } from "@/lib/pitch/difficulty";
+import {
+  pitchToleranceFactor,
+  scoringDifficulty,
+  type ScoringDifficulty,
+} from "@/lib/pitch/difficulty";
+
+export function matchesScoringSettings(
+  record: ScoreRecord,
+  difficulty: ScoringDifficulty,
+  factor = 1,
+): boolean {
+  return (
+    scoringDifficulty(record.difficulty) === difficulty &&
+    pitchToleranceFactor(record.pitch_tolerance_factor) === pitchToleranceFactor(factor)
+  );
+}
 
 export interface PersonalBestComparison {
   currentScore: number;
@@ -23,11 +38,12 @@ export function topScoresForSong(
   songHash: string,
   limit: number,
   difficulty: ScoringDifficulty = "medium",
+  factor = 1,
 ): Array<{ profile: string; score: number }> {
   const best = new Map<string, number>();
 
   for (const r of records) {
-    if (r.song_hash !== songHash || scoringDifficulty(r.difficulty) !== difficulty) {
+    if (r.song_hash !== songHash || !matchesScoringSettings(r, difficulty, factor)) {
       continue;
     }
 
@@ -49,13 +65,14 @@ export function personalBestForRun(
   profile: string,
   currentRawScore: number,
   difficulty: ScoringDifficulty = "medium",
+  factor = 1,
 ): PersonalBestComparison {
   const previousRawScores = records
     .filter(
       (record) =>
         record.song_hash === songHash &&
         record.profile === profile &&
-        scoringDifficulty(record.difficulty) === difficulty,
+        matchesScoringSettings(record, difficulty, factor),
     )
     .map((record) => record.score);
   const previousRaw = previousRawScores.length === 0 ? null : Math.max(...previousRawScores);

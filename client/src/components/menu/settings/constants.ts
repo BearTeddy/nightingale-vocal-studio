@@ -110,6 +110,7 @@ export const DEFAULTS = {
   beam_size: 8,
   batch_size: 8,
   mic_monitor_gain: 0.65,
+  pitch_tolerance_factor: 1,
   mic_monitor_mode: "low_latency",
   mic_latency_compensation_sec: DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
   auto_analyze: false,
@@ -126,6 +127,7 @@ export const DEFAULTS = {
   | "beam_size"
   | "batch_size"
   | "mic_monitor_gain"
+  | "pitch_tolerance_factor"
   | "mic_monitor_mode"
   | "mic_latency_compensation_sec"
   | "auto_analyze"
@@ -150,13 +152,14 @@ export const NAV = {
   general: {
     window: 1,
     microphone: 2,
-    micMonitorGain: 3,
-    micMonitorMode: 4,
-    micLatency: 5,
-    lyricsVerticalPosition: 6,
-    lyricsHorizontalPosition: 7,
-    japaneseLyrics: 8,
-    koreanLyrics: 9,
+    pitchTolerance: 3,
+    micMonitorGain: 4,
+    micMonitorMode: 5,
+    micLatency: 6,
+    lyricsVerticalPosition: 7,
+    lyricsHorizontalPosition: 8,
+    japaneseLyrics: 9,
+    koreanLyrics: 10,
   },
 } as const;
 
@@ -192,7 +195,7 @@ export function getAnalysisNav(isParakeet: boolean) {
 
 export function getSettingsStops(tab: SettingsTab, isParakeet: boolean) {
   if (tab === "general") {
-    return [2, 2, 1, 1, 1, 2, 1, 1, 1, 1, 2];
+    return [2, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2];
   }
 
   return isParakeet
