@@ -13,7 +13,7 @@ not be attributed to the upstream maintainers.
 
 ## What this fork adds
 
-- YouTube video and playlist import with highest-quality downloads and Unicode-safe metadata.
+- YouTube import as playback-compatible H.264/AAC MP4s, with Unicode-safe metadata, isolated download staging, and audio/video validation. Watch links import one video; explicit playlist links import playlists.
 - Versioned melody maps from UltraStar data, TorchCREPE, or pYIN, plus a correction editor.
 - Compiled Rust McLeod live-pitch analysis on desktop, with octave-aware scoring, JOYSOUND-style guidance, and phrase replay.
 - A local Vocal Studio with voice checkups, range visualization, adaptive exercises, ear training, and history.

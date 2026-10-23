@@ -42,6 +42,12 @@ export const YouTubeImportDialog = () => {
         const label = result.downloaded.length === 1 ? "video" : "videos";
         toast.success(`Imported ${result.downloaded.length} ${label}. Rescanning library…`);
       }
+      if (result.warnings.length > 0) {
+        toast.warning("Import completed with warnings", {
+          description: result.warnings.join("\n"),
+          duration: 10000,
+        });
+      }
       close();
     },
     onError: (error: Error) => toast.error(error.message),
@@ -85,7 +91,8 @@ export const YouTubeImportDialog = () => {
                 Import from YouTube
               </DialogTitle>
               <DialogDescription>
-                Add a video or playlist to the active Nightingale library.
+                Download a playable MP4 with video and audio. Video links import one song, even if
+                they include a YouTube mix. Use a playlist link to import a playlist.
               </DialogDescription>
             </DialogHeader>
 
@@ -111,7 +118,7 @@ export const YouTubeImportDialog = () => {
               {mutation.isPending && (
                 <p className="flex items-center gap-2 text-xs text-muted-foreground">
                   <LoaderCircleIcon className="size-3.5 animate-spin" />
-                  Downloading highest-quality video and audio…
+                  Downloading and merging compatible MP4 video and audio…
                 </p>
               )}
               {mutation.isError && (

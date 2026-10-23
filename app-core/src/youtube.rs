@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Mutex;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -9,17 +10,22 @@ use url::Url;
 
 use crate::cache::vendor_dir;
 use crate::config::{AppConfig, LibrarySource};
-use crate::vendor::ffmpeg_path;
+use crate::vendor::{ffmpeg_path, validate_ffmpeg};
 
 const OUTPUT_TEMPLATE: &str = concat!(
-    "%(artist,creator,uploader,channel|Unknown Artist).38U/",
+    "%(artist,creator,uploader,channel|Unknown Artist).60B/",
     "%(release_year,release_date>%Y,upload_date>%Y|Unknown Year)s - ",
-    "%(track,title|Unknown Title).52U/",
-    "%(artist,creator,uploader,channel|Unknown Artist).38U - ",
-    "%(track,title|Unknown Title).52U ",
+    "%(track,title|Unknown Title).100B/",
+    "%(artist,creator,uploader,channel|Unknown Artist).30B - ",
+    "%(track,title|Unknown Title).80B ",
     "(%(release_year,release_date>%Y,upload_date>%Y|Unknown Year)s) ",
     "[%(id)s].%(ext)s"
 );
+
+// WebKit playback needs compatible codecs, not just an .mp4 extension. Never
+// fall back to an audio-only stream or an AV1/Opus file renamed to MP4.
+const MP4_FORMAT: &str =
+    "bv[ext=mp4][vcodec^=avc1]+ba[ext=m4a][acodec^=mp4a]/b[ext=mp4][vcodec^=avc1][acodec^=mp4a]";
 
 const TITLE_NOISE_PATTERN: &str = concat!(
     r"(?i)\s*(?:\(|\[)(?:official(?:\s+music)?\s+video|official\s+audio|",
@@ -36,6 +42,7 @@ const EMBED_METADATA_RULES: &[&str] = &[
 const YT_DLP_RELEASE_BASE: &str =
     "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download";
 const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
+static IMPORT_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YoutubeImportResult {
@@ -45,6 +52,9 @@ pub struct YoutubeImportResult {
 }
 
 pub fn import_youtube(url: &str) -> Result<YoutubeImportResult, String> {
+    let _import = IMPORT_LOCK.try_lock().map_err(|_| {
+        "Another YouTube import is already running. Wait for it to finish.".to_string()
+    })?;
     validate_youtube_url(url)?;
 
     let config = AppConfig::load();
@@ -65,11 +75,9 @@ pub fn import_youtube(url: &str) -> Result<YoutubeImportResult, String> {
         )
     })?;
 
-    let yt_dlp = ensure_yt_dlp()?;
     let ffmpeg = ffmpeg_path();
-    if !ffmpeg.is_file() {
-        return Err("Nightingale's ffmpeg is not installed. Finish app setup first.".into());
-    }
+    validate_ffmpeg(&ffmpeg)?;
+    let yt_dlp = ensure_yt_dlp()?;
 
     let data_path = config.effective_data_path();
     fs::create_dir_all(&data_path).map_err(|error| {
@@ -81,30 +89,113 @@ pub fn import_youtube(url: &str) -> Result<YoutubeImportResult, String> {
 
     let run_id = rand::random::<u64>();
     let result_file = data_path.join(format!("youtube-import-{run_id}.jsonl"));
-    let archive_file = data_path.join("youtube-download-archive.txt");
-    let output_template = library_path.join(OUTPUT_TEMPLATE);
+    // The old archive could mark split/failed imports complete. Keep it for
+    // recovery, but only use the new archive for completed MP4 downloads.
+    let archive_file = data_path.join("youtube-mp4-download-archive.txt");
+    let staging_path = data_path.join("youtube-staging");
+    fs::create_dir_all(&staging_path)
+        .map_err(|error| format!("Failed to create download staging folder: {error}"))?;
 
-    let mut command = silent_command(&yt_dlp);
+    let mut command = download_command(
+        &yt_dlp,
+        &ffmpeg,
+        &library_path,
+        &staging_path,
+        &archive_file,
+        &result_file,
+        url,
+    );
+    let output = command
+        .output()
+        .map_err(|error| format!("Failed to start yt-dlp: {error}"))?;
+    let mut downloaded = read_downloaded_paths(&result_file);
+    let _ = fs::remove_file(&result_file);
+    downloaded.sort();
+    downloaded.dedup();
+
+    let mut warnings = output_warnings(&output);
+    let mut valid = Vec::new();
+    let mut validation_failed = false;
+    for path in downloaded {
+        match validate_downloaded_mp4(&ffmpeg, &path) {
+            Ok(()) => valid.push(path),
+            Err(error) => {
+                validation_failed = true;
+                warnings.push(error);
+            }
+        }
+    }
+    if valid.is_empty() && (!output.status.success() || validation_failed) {
+        let details = output_details(&output);
+        return Err(format!(
+            "No complete playable MP4 was imported.\n{}\n{details}",
+            warnings.join("\n")
+        ));
+    }
+    if !output.status.success() && !valid.is_empty() {
+        warnings.push("Some videos could not be imported. Only completed MP4s were added.".into());
+    }
+
+    Ok(YoutubeImportResult {
+        downloaded: valid,
+        library_path,
+        warnings,
+    })
+}
+
+fn download_command(
+    yt_dlp: &Path,
+    ffmpeg: &Path,
+    library: &Path,
+    staging: &Path,
+    archive: &Path,
+    results: &Path,
+    url: &str,
+) -> Command {
+    let mut command = silent_command(yt_dlp);
+    if let Some(node) = supported_node_runtime() {
+        // GUI launches do not inherit Homebrew's PATH. Enable the installed
+        // runtime explicitly so yt-dlp can solve YouTube's JS challenges.
+        command
+            .arg("--js-runtimes")
+            .arg(format!("node:{}", node.display()));
+    }
     command
-        .arg("--yes-playlist")
-        .arg("--ignore-errors")
+        .arg("--ignore-config")
+        // A watch URL with list=RD... is one video, not an accidental radio mix.
+        // Explicit /playlist URLs still import the playlist.
+        .arg("--no-playlist")
+        .arg("--abort-on-error")
         .arg("--continue")
         .arg("--no-overwrites")
         .arg("--no-restrict-filenames")
         .arg("--windows-filenames")
         .args(["--encoding", "utf-8"])
         .arg("--download-archive")
-        .arg(&archive_file)
+        .arg(archive)
         .arg("--ffmpeg-location")
-        .arg(&ffmpeg)
+        .arg(ffmpeg)
         .arg("--format")
-        .arg("bv*+ba/b")
+        .arg(MP4_FORMAT)
         .arg("--merge-output-format")
-        .arg("mkv")
+        .arg("mp4")
+        .args(["--remux-video", "mp4"])
+        // Output MUST be relative: absolute templates bypass --paths temp and
+        // expose half-finished video/audio streams to the library scanner.
+        .arg("--paths")
+        .arg(format!("home:{}", library.display()))
+        .arg("--paths")
+        .arg(format!("temp:{}", staging.display()))
         .arg("--output")
-        .arg(&output_template)
-        .arg("--trim-filenames")
-        .arg("180")
+        .arg(OUTPUT_TEMPLATE)
+        .args([
+            "--socket-timeout",
+            "30",
+            "--retries",
+            "3",
+            "--fragment-retries",
+            "3",
+        ])
         .arg("--no-write-playlist-metafiles")
         .arg("--concurrent-fragments")
         .arg("4")
@@ -130,35 +221,68 @@ pub fn import_youtube(url: &str) -> Result<YoutubeImportResult, String> {
     command
         .arg("--print-to-file")
         .arg("after_move:%(filepath)j")
-        .arg(&result_file)
+        .arg(results)
         .arg("--newline")
         .arg(url.trim());
 
-    let output = command
-        .output()
-        .map_err(|error| format!("Failed to start yt-dlp: {error}"))?;
-    let mut downloaded = read_downloaded_paths(&result_file);
-    let _ = fs::remove_file(&result_file);
+    command
+}
 
-    downloaded.retain(|path| path.is_file());
-    downloaded.sort();
-    downloaded.dedup();
-
-    let warnings = output_warnings(&output);
-    if !output.status.success() && downloaded.is_empty() {
-        let details = output_details(&output);
-        return Err(if details.is_empty() {
-            format!("yt-dlp exited with status {}", output.status)
-        } else {
-            format!("yt-dlp could not complete the import:\n{details}")
-        });
+fn supported_node_runtime() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    let mut candidates = vec![vendor_dir().join(name)];
+    if cfg!(target_os = "macos") {
+        candidates.extend([
+            PathBuf::from("/opt/homebrew/bin/node"),
+            PathBuf::from("/usr/local/bin/node"),
+        ]);
     }
-
-    Ok(YoutubeImportResult {
-        downloaded,
-        library_path,
-        warnings,
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(name)));
+    }
+    candidates.into_iter().find(|path| {
+        path.is_file()
+            && silent_command(path)
+                .arg("--version")
+                .output()
+                .is_ok_and(|output| {
+                    output.status.success()
+                        && supported_node_version(&String::from_utf8_lossy(&output.stdout))
+                })
     })
+}
+
+fn supported_node_version(version: &str) -> bool {
+    version
+        .trim()
+        .strip_prefix('v')
+        .and_then(|v| v.split('.').next())
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 22)
+}
+
+fn validate_downloaded_mp4(ffmpeg: &Path, path: &Path) -> Result<(), String> {
+    if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("mp4") {
+        return Err(format!("The completed MP4 is missing: {}", path.display()));
+    }
+    // Decode a short sample and require BOTH streams. A file extension or a
+    // successful downloader exit alone does not prove a playable karaoke file.
+    let output = silent_command(ffmpeg)
+        .args(["-nostdin", "-v", "error", "-xerror", "-i"])
+        .arg(path)
+        .args([
+            "-map", "0:v:0", "-map", "0:a:0", "-t", "0.1", "-f", "null", "-",
+        ])
+        .output()
+        .map_err(|error| format!("Could not validate downloaded MP4: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Downloaded MP4 does not contain decodable video and audio: {}\n{}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
 }
 
 fn validate_youtube_url(input: &str) -> Result<(), String> {
@@ -510,10 +634,122 @@ fn mark_executable(_path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EMBED_METADATA_RULES, checksum_file_matches, download_verified_yt_dlp,
-        install_verified_yt_dlp, parse_expected_checksum, sha256_file, validate_youtube_url,
-        yt_dlp_asset_name_for,
+        EMBED_METADATA_RULES, MP4_FORMAT, OUTPUT_TEMPLATE, checksum_file_matches, download_command,
+        download_verified_yt_dlp, install_verified_yt_dlp, parse_expected_checksum, sha256_file,
+        validate_youtube_url, yt_dlp_asset_name_for,
     };
+    use std::path::Path;
+
+    #[test]
+    fn youtube_runtime_requires_node_22_or_newer() {
+        assert!(super::supported_node_version("v22.0.0\n"));
+        assert!(super::supported_node_version("v26.7.0"));
+        assert!(!super::supported_node_version("v20.19.0"));
+        assert!(!super::supported_node_version("not a version"));
+    }
+
+    #[test]
+    fn download_requires_compatible_mp4_and_keeps_fragments_outside_library() {
+        let command = download_command(
+            Path::new("yt-dlp"),
+            Path::new("ffmpeg"),
+            Path::new("/library"),
+            Path::new("/data/staging"),
+            Path::new("/data/archive"),
+            Path::new("/data/results"),
+            "https://youtube.com/watch?v=video&list=RDvideo",
+        );
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect();
+        assert!(args.iter().any(|arg| arg == "--no-playlist"));
+        assert!(args.iter().any(|arg| arg == "--abort-on-error"));
+        assert!(args.iter().any(|arg| arg == "--ignore-config"));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--yes-playlist" || arg == "--ignore-errors")
+        );
+        assert!(args.windows(2).any(|pair| pair == ["--format", MP4_FORMAT]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--merge-output-format", "mp4"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--paths", "home:/library"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--paths", "temp:/data/staging"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--output", OUTPUT_TEMPLATE])
+        );
+        assert!(!Path::new(OUTPUT_TEMPLATE).is_absolute());
+        // Byte limits leave room for the complete ID, extension and sidecars.
+        assert!(OUTPUT_TEMPLATE.contains("[%(id)s].%(ext)s"));
+        assert!(!args.iter().any(|arg| arg == "--trim-filenames"));
+    }
+
+    #[test]
+    #[ignore = "explicit opt-in: downloads NIGHTINGALE_TEST_YOUTUBE_URL into the configured library"]
+    fn imports_requested_video_into_configured_library() {
+        let url =
+            std::env::var("NIGHTINGALE_TEST_YOUTUBE_URL").expect("provide a single video URL");
+        let result = super::import_youtube(&url).unwrap();
+        assert_eq!(result.downloaded.len(), 1, "expected one completed MP4");
+        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    }
+
+    #[test]
+    #[ignore = "requires a working NIGHTINGALE_TEST_FFMPEG executable"]
+    fn mp4_validation_requires_audio_and_video() {
+        let ffmpeg = std::env::var("NIGHTINGALE_TEST_FFMPEG").expect("provide ffmpeg path");
+        let root = std::env::temp_dir().join(format!(
+            "nightingale-mp4-validation-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for (name, audio) in [("complete.mp4", true), ("silent.mp4", false)] {
+            let path = root.join(name);
+            let mut command = super::silent_command(Path::new(&ffmpeg));
+            command.args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=64x64:rate=10",
+            ]);
+            if audio {
+                command.args([
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=44100",
+                    "-c:a",
+                    "aac",
+                ]);
+            }
+            let status = command
+                .args(["-t", "0.2", "-c:v", "libx264"])
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            assert_eq!(
+                super::validate_downloaded_mp4(Path::new(&ffmpeg), &path).is_ok(),
+                audio
+            );
+        }
+        assert!(
+            super::validate_downloaded_mp4(Path::new(&ffmpeg), &root.join("missing.mp4")).is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn accepts_video_and_playlist_urls() {

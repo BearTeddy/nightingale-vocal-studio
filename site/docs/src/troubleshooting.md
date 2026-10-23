@@ -13,6 +13,29 @@ If song analysis fails:
 3. Try selecting **Re-run Setup** from the sidebar actions menu to reset the vendor environment
 4. GPU memory errors may occur with very long songs — CPU fallback will be used automatically
 
+## YouTube Imports Show `.f251` / `.f401` or 0:00
+
+Files such as `song.f251.webm` and `song.f401.mp4` are separate downloader
+streams, not complete karaoke videos. Renaming them to `.mp4` does not merge
+audio and video. Older builds could leave these in the library when FFmpeg
+could not run, particularly when an Intel FFmpeg was installed on Apple Silicon.
+
+The Vocal Studio fork now checks FFmpeg before downloading, stages unfinished
+streams outside the library, and requests H.264 video with AAC audio in one MP4.
+It also ignores old `.f<number>` streams during library scans. Keep any old files
+as a backup and reimport the original video URL after updating; do not delete
+your whole library or analysis cache. A watch URL containing a radio mix now
+imports only that video. Use a `/playlist?list=...` URL to import a whole playlist.
+
+The downloader uses an existing Node 22+ runtime when available (including
+Homebrew paths on macOS). If it reports a missing JavaScript runtime, install a
+supported runtime following the [official yt-dlp guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
+
+On Apple Silicon, setup also selects the official macOS 12-compatible SciPy
+1.15.3 wheel for its Python 3.10 environment and runs an analysis-import health
+check. This avoids the PROPACK `__thread_bss` loader failure from the macOS 14
+wheel on newer macOS versions.
+
 ## No Sound
 
 - Verify your audio output device is correctly configured

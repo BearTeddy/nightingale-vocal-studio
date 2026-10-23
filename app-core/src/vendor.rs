@@ -69,6 +69,19 @@ pub fn ffmpeg_path() -> PathBuf {
     vendor_dir().join(name)
 }
 
+pub fn validate_ffmpeg(path: &Path) -> Result<(), String> {
+    let output = silent_command(path).arg("-version").output().map_err(|error| {
+        format!("Nightingale's FFmpeg cannot run on this computer ({error}). Repair the media tools in setup before importing or analyzing songs.")
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Nightingale's FFmpeg health check failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
 pub fn python_path() -> PathBuf {
     if cfg!(windows) {
         vendor_dir().join("venv").join("Scripts").join("python.exe")
@@ -162,7 +175,10 @@ pub fn is_ready() -> bool {
         && ffmpeg_path().is_file()
         && python_path().is_file()
         && analyzer_dir().join("analyze.py").is_file();
-    files_ready && repair_relocated_venv().is_ok() && python_runtime_works()
+    files_ready
+        && validate_ffmpeg(&ffmpeg_path()).is_ok()
+        && repair_relocated_venv().is_ok()
+        && python_runtime_works()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
@@ -530,14 +546,18 @@ pub fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 // ─── Step 1: Download ffmpeg ─────────────────────────────────────────
 
 fn ffmpeg_download_url() -> Result<&'static str, String> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
+    ffmpeg_download_url_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn ffmpeg_download_url_for(os: &str, arch: &str) -> Result<&'static str, String> {
+    match (os, arch) {
         ("linux", "x86_64") => {
             Ok("https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz")
         }
         ("linux", "aarch64") => {
             Ok("https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz")
         }
-        ("macos", "aarch64") => Ok("https://evermeet.cx/ffmpeg/ffmpeg-8.1.zip"),
+        ("macos", "aarch64") => Ok("https://www.osxexperts.net/ffmpeg9arm.zip"),
         ("macos", "x86_64") => Ok("https://evermeet.cx/ffmpeg/ffmpeg-8.1.zip"),
         ("windows", "x86_64") => Ok(
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
@@ -548,7 +568,7 @@ fn ffmpeg_download_url() -> Result<&'static str, String> {
 
 pub fn step_download_ffmpeg() -> Result<(), String> {
     let dest = ffmpeg_path();
-    if dest.is_file() {
+    if validate_ffmpeg(&dest).is_ok() {
         return Ok(());
     }
 
@@ -577,8 +597,29 @@ pub fn step_download_ffmpeg() -> Result<(), String> {
         let found = find_file_in(&tmp_dir, binary_name)
             .ok_or_else(|| format!("Could not find {binary_name} in downloaded archive"))?;
 
-        std::fs::copy(&found, &dest).map_err(|e| format!("Failed to copy ffmpeg: {e}"))?;
-        mark_executable(&dest)?;
+        // Validate the extracted binary before replacing any installed tool.
+        // The former macOS download was Intel-only, including on Apple Silicon.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            use sha2::{Digest, Sha256};
+            let bytes =
+                std::fs::read(&found).map_err(|e| format!("Could not verify FFmpeg: {e}"))?;
+            let digest = format!("{:x}", Sha256::digest(&bytes));
+            if digest != "591260c945d0eef150e3bf82b0ef988bd36a9cecc18ff05d6679617159f0a95e" {
+                return Err("The Apple Silicon FFmpeg download failed its integrity check.".into());
+            }
+        }
+        mark_executable(&found)?;
+        validate_ffmpeg(&found)?;
+        let staged = dest.with_extension("new");
+        std::fs::copy(&found, &staged).map_err(|e| format!("Failed to stage ffmpeg: {e}"))?;
+        mark_executable(&staged)?;
+        if dest.exists() {
+            let backup = dest.with_extension(format!("previous-{}", rand::random::<u64>()));
+            std::fs::rename(&dest, &backup)
+                .map_err(|e| format!("Failed to back up ffmpeg: {e}"))?;
+        }
+        std::fs::rename(&staged, &dest).map_err(|e| format!("Failed to install ffmpeg: {e}"))?;
         Ok(())
     })();
 
@@ -885,6 +926,16 @@ pub fn step_install_packages() -> Result<(), String> {
         pkg_args.push("torchaudio<2.3");
     }
 
+    // Python 3.10's macosx_14_0 SciPy wheel contains a PROPACK Mach-O section
+    // rejected by newer macOS loaders. The official macosx_12_0 wheel of the
+    // SAME version passes the import and PROPACK smoke tests on Apple Silicon.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pkg_args.push(concat!(
+        "scipy @ https://files.pythonhosted.org/packages/a0/6e/0c3bf90fae0e910c274db43304ebe25a6b391327f3f10b5dcc638c090795/",
+        "scipy-1.15.3-cp310-cp310-macosx_12_0_arm64.whl",
+        "#sha256=ad3432cb0f9ed87477a8d97f03b763fd1d57709f1bbde3c9369b1dff5503b253"
+    ));
+
     pkg_args.push("--python");
     pkg_args.push(&py_str);
 
@@ -979,6 +1030,17 @@ pub fn step_install_packages() -> Result<(), String> {
         return Err(format!("transformers (Qwen3-ASR) install failed: {stderr}"));
     }
 
+    let health = silent_command(&py)
+        .args(["-c", "import scipy.sparse.linalg, scipy.signal, librosa, torch, whisperx.asr; from audio_separator.separator import Separator"])
+        .output()
+        .map_err(|error| format!("Could not check analysis dependencies: {error}"))?;
+    if !health.status.success() {
+        return Err(format!(
+            "Analysis dependency health check failed: {}",
+            String::from_utf8_lossy(&health.stderr)
+        ));
+    }
+
     Ok(())
 }
 
@@ -1008,8 +1070,27 @@ pub fn mark_ready() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::rewrite_venv_home;
+    use super::{ffmpeg_download_url_for, rewrite_venv_home, validate_ffmpeg};
     use std::path::Path;
+
+    #[test]
+    fn apple_silicon_gets_a_native_ffmpeg_build() {
+        assert!(
+            ffmpeg_download_url_for("macos", "aarch64")
+                .unwrap()
+                .ends_with("ffmpeg9arm.zip")
+        );
+        assert_ne!(
+            ffmpeg_download_url_for("macos", "aarch64"),
+            ffmpeg_download_url_for("macos", "x86_64")
+        );
+        assert!(ffmpeg_download_url_for("unknown", "unknown").is_err());
+    }
+
+    #[test]
+    fn missing_ffmpeg_fails_preflight() {
+        assert!(validate_ffmpeg(Path::new("/missing/nightingale/ffmpeg")).is_err());
+    }
 
     #[test]
     fn rewrites_a_relocated_python_home_without_losing_config() {

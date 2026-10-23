@@ -129,6 +129,19 @@ pub(crate) fn refresh_local_video_sidecars(songs: &mut [Song], cache: &CacheDir)
 }
 
 fn classify_media_file(path: &Path) -> Option<MediaKind> {
+    // yt-dlp's separate format streams are not songs. Older importers left
+    // these in the library when FFmpeg failed (e.g. .f401.mp4 / .f251.webm).
+    let stem = path.file_stem()?.to_str()?;
+    if let Some(format) = stem
+        .rsplit('.')
+        .next()
+        .and_then(|part| part.strip_prefix('f'))
+    {
+        let format = format.strip_suffix("-sr").unwrap_or(format);
+        if !format.is_empty() && format.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -281,4 +294,43 @@ fn collect_media_paths(folder: &Path) -> Vec<(PathBuf, MediaKind)> {
 
     paths.retain(|(p, kind)| matches!(kind, MediaKind::Usdx) || !claimed.contains(p));
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MediaKind, classify_media_file};
+    use std::path::Path;
+
+    #[test]
+    fn ignores_separate_youtube_format_streams_and_partial_downloads() {
+        for name in [
+            "song.f251.webm",
+            "song.f401.mp4",
+            "song.f140.m4a",
+            "song.f251-sr.webm",
+            "song.mp4.part",
+            "song.f401.mp4.part-Frag1",
+        ] {
+            assert!(classify_media_file(Path::new(name)).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn keeps_complete_media_and_ordinary_names_containing_f() {
+        for name in [
+            "song.mp4",
+            "song.final.mp4",
+            "song.f.mp4",
+            "song.finale.webm",
+        ] {
+            assert!(
+                matches!(classify_media_file(Path::new(name)), Some(MediaKind::Video)),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            classify_media_file(Path::new("song.flac")),
+            Some(MediaKind::Audio)
+        ));
+    }
 }
