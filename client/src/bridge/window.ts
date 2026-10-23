@@ -15,7 +15,9 @@ export const windowImmersive = async (): Promise<boolean> => {
 
 export const minimizeWindow = async (): Promise<void> => {
   if (!isTauri) return;
-  return invoke<void>("minimize_window");
+  await invoke<void>("minimize_window");
+  // The native minimize command exits simple fullscreen first.
+  window.dispatchEvent(new Event("nightingale-fullscreen-change"));
 };
 
 export const startWindowDragging = async (): Promise<void> => {

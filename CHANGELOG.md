@@ -15,6 +15,7 @@ below.
 
 ### Improvements
 
+- Added desktop local multiplayer for 2–4 singers, with remembered profile/microphone/channel/color assignments, a required live microphone check, separate native pitch trackers and colored traces, player combos, and per-profile result scores. Shared audio-interface channels use one hardware stream. Lost/overloaded inputs pause gameplay; solo recording and voice monitoring remain unchanged (multiplayer recording/monitoring are not enabled).
 - Added a saved Hard–Easy pitch-catching factor (0.50×–2.00×) in Settings and the playback HUD. Adjusting it recalculates the current score and combo from captured pitch without restarting the microphone; scores compare only matching presets and factors. Forgiving runs remain assisted practice in learning history.
 - Lyrics search now ranks title, artist, duration, original script and overlap with supplied lyrics, offers editable search metadata, previews every candidate with its source, and avoids automatically accepting ambiguous versions.
 - Japanese playback supports original text, contextual furigana, Hepburn romaji, both guides, or romaji only. Korean supports Hangul, pronunciation-aware romanization, or both. Existing songs and timed LRC gain guides locally without repeating audio analysis.

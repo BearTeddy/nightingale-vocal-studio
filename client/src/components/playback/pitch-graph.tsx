@@ -272,6 +272,7 @@ function drawSinger(
   series: PitchSeries,
   time: number,
   viewport: Viewport,
+  playerColor?: string,
 ): void {
   context.save();
   context.lineWidth = 5;
@@ -290,7 +291,7 @@ function drawSinger(
     // Never bridge a transient/octave reacquisition with a tall vertical line.
     // The next stable frame still draws normally, so legitimate high notes remain visible.
     if (Math.abs(freqToSemitone(current) - freqToSemitone(previous)) >= 4) continue;
-    context.strokeStyle = traceColor(series.similarities[index] ?? 0);
+    context.strokeStyle = playerColor ?? traceColor(series.similarities[index] ?? 0);
     context.beginPath();
     context.moveTo(
       timeToX(previousTime, time, viewport),
@@ -315,6 +316,7 @@ function drawSingerMarker(
   context: CanvasRenderingContext2D,
   series: PitchSeries,
   viewport: Viewport,
+  playerColor?: string,
 ): void {
   const pitch = latestUserPitch(series);
   if (pitch == null) return;
@@ -323,7 +325,7 @@ function drawSingerMarker(
   const rawY = midiToY(freqToSemitone(pitch), viewport);
   const y = Math.max(8, Math.min(viewport.height - 8, rawY));
   context.save();
-  context.fillStyle = traceColor(series.similarities[index] ?? 0);
+  context.fillStyle = playerColor ?? traceColor(series.similarities[index] ?? 0);
   context.strokeStyle = "rgba(255,255,255,0.95)";
   context.lineWidth = 2;
   context.shadowColor = "rgba(0,0,0,0.8)";
@@ -345,11 +347,14 @@ export function PitchGraph({ series, position = "top" }: PitchGraphProps) {
     feedbackMode,
     scoringDifficulty,
     pitchToleranceFactor,
+    multiplayerPlayers,
   } = usePlaybackMicState();
   const { subscribe, getCurrentTime } = usePlaybackTransportActions();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const timeRef = useRef(0);
   const seriesRef = useRef(series);
+  const playersRef = useRef(multiplayerPlayers);
+  playersRef.current = multiplayerPlayers;
   const melodyRef = useRef(melody);
   const viewportSizeRef = useRef({ width: 0, height: 0 });
   const viewportCenterRef = useRef<number | null>(null);
@@ -408,9 +413,17 @@ export function PitchGraph({ series, position = "top" }: PitchGraphProps) {
         (burst) => nowMs - burst.createdAtMs < NOTE_HIT_LIFETIME_MS,
       );
       drawTargets(context, notes, time, viewport, hitBurstsRef.current, nowMs);
-      if (micReady) drawSinger(context, seriesRef.current, time, viewport);
+      if (playersRef.current.length > 1) {
+        for (const player of playersRef.current) {
+          if (player.ready) drawSinger(context, player.series, time, viewport, player.color);
+        }
+      } else if (micReady) drawSinger(context, seriesRef.current, time, viewport);
       drawPlayhead(context, viewport);
-      if (micReady) drawSingerMarker(context, seriesRef.current, viewport);
+      if (playersRef.current.length > 1) {
+        for (const player of playersRef.current) {
+          if (player.ready) drawSingerMarker(context, player.series, viewport, player.color);
+        }
+      } else if (micReady) drawSingerMarker(context, seriesRef.current, viewport);
       drawNoteHitBursts(context, hitBurstsRef.current, time, viewport, nowMs);
     };
     drawRef.current = draw;
@@ -518,7 +531,34 @@ export function PitchGraph({ series, position = "top" }: PitchGraphProps) {
       }`}
     >
       <canvas ref={canvasRef} className="block w-full" />
-      <NoteCelebration />
+      {multiplayerPlayers.length === 0 && <NoteCelebration />}
+      {multiplayerPlayers.length > 1 && (
+        <div
+          className="absolute inset-x-3 bottom-2 flex flex-wrap justify-end gap-2"
+          aria-label="Multiplayer scores"
+        >
+          {multiplayerPlayers.map((player) => (
+            <div
+              key={player.id}
+              className="rounded border bg-black/85 px-2 py-1 text-xs text-white"
+              style={{ borderColor: player.color }}
+            >
+              <span style={{ color: player.color }}>{player.profile}</span> ·{" "}
+              {player.error ? "Mic error" : `${player.performance.overall}/100`}
+              <span
+                key={player.performance.streak}
+                className={
+                  player.performance.streak > 0
+                    ? "nightingale-combo-badge ml-2 inline-block"
+                    : "ml-2"
+                }
+              >
+                ★ {player.performance.streak} combo
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="absolute left-3 top-2 flex max-w-[35%] flex-col items-start gap-2">
         <div className="bg-black/70 px-2 py-1 text-sm font-semibold text-white tabular-nums">
           {inputLabel}
@@ -543,14 +583,17 @@ export function PitchGraph({ series, position = "top" }: PitchGraphProps) {
           </>
         )}
       </div>
-      {feedbackMode === "coach" && coachHint && melody?.strict_scoring_available && (
-        <div
-          className="absolute bottom-2 right-3 max-w-[65vw] truncate bg-black/55 px-2 py-1 text-xs text-white/75"
-          aria-live="polite"
-        >
-          {coachHint}
-        </div>
-      )}
+      {multiplayerPlayers.length === 0 &&
+        feedbackMode === "coach" &&
+        coachHint &&
+        melody?.strict_scoring_available && (
+          <div
+            className="absolute bottom-2 right-3 max-w-[65vw] truncate bg-black/55 px-2 py-1 text-xs text-white/75"
+            aria-live="polite"
+          >
+            {coachHint}
+          </div>
+        )}
       {!melody?.strict_scoring_available && (
         <div className="absolute bottom-2 left-3 bg-black/55 px-2 py-1 text-xs text-white/70">
           Free sing: pitch guide is waiting for melody analysis

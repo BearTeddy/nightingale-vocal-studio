@@ -34,6 +34,8 @@ import {
   stopVocalRecording,
 } from "@/bridge/recording";
 import type { AppConfig } from "@/types/AppConfig";
+import type { MultiplayerPlayer } from "@/types/MultiplayerPlayer";
+import { useMultiplayerCapture } from "@/hooks/use-multiplayer-capture";
 import type { MelodyMap } from "@/types/MelodyMap";
 import type { MicCaptureStatus } from "@/types/MicCaptureStatus";
 import type { PerformanceScore } from "@/types/PerformanceScore";
@@ -59,6 +61,8 @@ import {
 import type { TransportEvent } from "./playback-transport-context";
 
 export interface PlaybackMicState {
+  multiplayerPlayers: MultiplayerPlayerState[];
+  multiplayerError: string | null;
   micUserEnabled: boolean;
   micMonitorUserEnabled: boolean;
   micMonitorGain: number;
@@ -94,6 +98,15 @@ export interface PlaybackMicState {
   pitchToleranceFactor: number;
 }
 
+export interface MultiplayerPlayerState extends MultiplayerPlayer {
+  performance: PerformanceScore;
+  series: PitchSeries;
+  ready: boolean;
+  error: string | null;
+}
+
+const NO_PLAYERS: MultiplayerPlayer[] = [];
+
 export interface PlaybackMicActions {
   reactiveRef: MicReactiveRef;
   handleToggleMic: () => void;
@@ -122,6 +135,7 @@ interface PlaybackMicProviderProps {
   tempo: number;
   config: AppConfig | null;
   children: ReactNode;
+  players?: MultiplayerPlayer[];
 }
 
 export function PlaybackMicProvider({
@@ -133,16 +147,18 @@ export function PlaybackMicProvider({
   tempo,
   config,
   children,
+  players = NO_PLAYERS,
 }: PlaybackMicProviderProps) {
+  const multiplayer = players.length > 1;
   const { isReady, isPlaying, isFinished, paused, duration } = usePlaybackTransportState();
   const { subscribe, subscribeTransportEvents, getCurrentTime, getVocalsBuffer } =
     usePlaybackTransportActions();
 
   const persistConfig = usePlaybackConfigPersist(config);
 
-  const [micUserEnabled, setMicUserEnabled] = useState(config?.mic_active ?? true);
+  const [micUserEnabled, setMicUserEnabled] = useState(multiplayer || (config?.mic_active ?? true));
   const [micMonitorUserEnabled, setMicMonitorUserEnabled] = useState(
-    config?.mic_monitoring ?? false,
+    !multiplayer && (config?.mic_monitoring ?? false),
   );
   const [micMonitorGain, setMicMonitorGainState] = useState(config?.mic_monitor_gain ?? 0.65);
   const [selectedMicId, setSelectedMicId] = useState<string | null>(config?.preferred_mic ?? null);
@@ -214,7 +230,7 @@ export function PlaybackMicProvider({
   // Start capture while stems are loading so the recording can include a real
   // pre-roll even on machines where playback becomes ready immediately.
   const captureEnabled =
-    micUserEnabled && (recordingWanted || micPitchEnabled || micMonitorEnabled);
+    !multiplayer && micUserEnabled && (recordingWanted || micPitchEnabled || micMonitorEnabled);
 
   const captureOptions = useMemo(
     () => ({
@@ -227,16 +243,21 @@ export function PlaybackMicProvider({
   );
 
   const {
-    active: micCaptureActive,
+    active: soloCaptureActive,
     error: micCaptureError,
     status: micCaptureStatus,
   } = useMicCapture(selectedMicId, captureEnabled, captureOptions);
   const {
-    latestFrame,
-    active: micPitchActive,
+    latestFrame: soloFrame,
+    active: soloPitchActive,
     error: micPitchError,
-  } = useMicPitch(micPitchEnabled);
-  const reactiveRef = useMicReactive(micPitchEnabled);
+  } = useMicPitch(!multiplayer && micPitchEnabled);
+  const reactiveRef = useMicReactive(!multiplayer && micPitchEnabled);
+  const multiplayerCapture = useMultiplayerCapture(players, multiplayer && !isFinished);
+  const latestFrame = multiplayer ? (multiplayerCapture.frames[players[0].id] ?? null) : soloFrame;
+  const micCaptureActive = multiplayer ? multiplayerCapture.ready : soloCaptureActive;
+  const micPitchActive = multiplayer ? latestFrame != null : soloPitchActive;
+  const multiplayerError = Object.values(multiplayerCapture.errors)[0] ?? null;
 
   useEffect(() => {
     const enabled = micCaptureActive && micMonitorEnabled;
@@ -257,6 +278,55 @@ export function PlaybackMicProvider({
       selectedPitchTolerance,
     );
   const getPitchInputEvidenceRef = useRef(getPitchInputEvidence);
+  const playerTwo = usePitchScoring(
+    {
+      isReady: isReady && players.length >= 2,
+      duration,
+      getReferenceBuffer: getVocalsBuffer,
+      subscribe,
+    },
+    multiplayerCapture.frames[players[1]?.id] ?? null,
+    melody,
+    config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+    selectedScoringDifficulty,
+    selectedPitchTolerance,
+  );
+  const playerThree = usePitchScoring(
+    {
+      isReady: isReady && players.length >= 3,
+      duration,
+      getReferenceBuffer: getVocalsBuffer,
+      subscribe,
+    },
+    multiplayerCapture.frames[players[2]?.id] ?? null,
+    melody,
+    config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+    selectedScoringDifficulty,
+    selectedPitchTolerance,
+  );
+  const playerFour = usePitchScoring(
+    {
+      isReady: isReady && players.length >= 4,
+      duration,
+      getReferenceBuffer: getVocalsBuffer,
+      subscribe,
+    },
+    multiplayerCapture.frames[players[3]?.id] ?? null,
+    melody,
+    config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
+    selectedScoringDifficulty,
+    selectedPitchTolerance,
+  );
+  const multiplayerPlayers = players.map((player, index) => {
+    const scoring = [{ performance, series }, playerTwo, playerThree, playerFour][index];
+    return {
+      ...player,
+      performance: scoring.performance,
+      series: scoring.series,
+      ready: multiplayerCapture.ready && multiplayerCapture.frames[player.id] != null,
+      error: multiplayerCapture.errors[player.id] ?? multiplayerCapture.errors.all ?? null,
+    };
+  });
   performanceRef.current = performance;
   getPerformanceSeriesRef.current = getPerformanceSeries;
   getPitchInputEvidenceRef.current = getPitchInputEvidence;
@@ -416,6 +486,7 @@ export function PlaybackMicProvider({
 
   const saveUnrecordedPracticeSession = useCallback(
     async (completion: "completed" | "interrupted") => {
+      if (multiplayer) return;
       if (practiceSessionSavedRef.current) return;
       const scorePayload = performanceRef.current;
       if (!scorePayload || scorePayload.phrases.length === 0) return;
@@ -450,7 +521,7 @@ export function PlaybackMicProvider({
         }
       }
     },
-    [config?.mic_latency_compensation_sec, fileHash, profiles?.active],
+    [config?.mic_latency_compensation_sec, fileHash, profiles?.active, multiplayer],
   );
 
   const handleTransportEvent = useCallback(
@@ -655,6 +726,12 @@ export function PlaybackMicProvider({
   }, [recordingStatus]);
 
   const handleToggleMic = useCallback(() => {
+    if (multiplayer) {
+      toast.info(
+        "Multiplayer microphones stay assigned for the song. Pause or exit to stop singing.",
+      );
+      return;
+    }
     setMicUserEnabled((prev) => {
       const next = !prev;
       if (!next && recordingStartedRef.current && !finalizingRef.current) {
@@ -674,18 +751,28 @@ export function PlaybackMicProvider({
       }
       return next;
     });
-  }, [getCurrentTime, persistConfig, micMonitorUserEnabled]);
+  }, [getCurrentTime, persistConfig, micMonitorUserEnabled, multiplayer]);
 
   const handleCycleMic = useCallback(() => {
+    if (multiplayer) {
+      toast.info("Return to multiplayer setup to change microphone assignments.");
+      return;
+    }
     if (micDevices.length <= 1) return;
     const currentIdx = micDevices.findIndex((d) => d.deviceId === selectedMicId);
     const nextIdx = (currentIdx + 1) % micDevices.length;
     const next = micDevices[nextIdx];
     setSelectedMicId(next.deviceId);
     persistConfig({ preferred_mic: next.deviceId });
-  }, [micDevices, selectedMicId, persistConfig]);
+  }, [micDevices, selectedMicId, persistConfig, multiplayer]);
 
   const handleToggleMicMonitor = useCallback(() => {
+    if (multiplayer) {
+      toast.info(
+        "Use your interface's direct monitoring in multiplayer. App monitoring remains available in solo mode.",
+      );
+      return;
+    }
     setMicMonitorUserEnabled((prev) => {
       const next = !prev;
       persistConfig({ mic_monitoring: next });
@@ -698,7 +785,7 @@ export function PlaybackMicProvider({
       }
       return next;
     });
-  }, [persistConfig, micUserEnabled]);
+  }, [persistConfig, micUserEnabled, multiplayer]);
 
   const changeMicMonitorGain = useCallback((gain: number) => {
     const next = Math.max(0, Math.min(2, gain));
@@ -734,6 +821,10 @@ export function PlaybackMicProvider({
   );
 
   const handleToggleRecording = useCallback(() => {
+    if (multiplayer) {
+      toast.info("Recording is available in solo mode; multiplayer records scores only.");
+      return;
+    }
     setRecordingWanted((current) => {
       const next = !current;
       if (!next && recordingStartedRef.current && !finalizingRef.current) {
@@ -751,7 +842,7 @@ export function PlaybackMicProvider({
       }
       return next;
     });
-  }, [getCurrentTime, updateRecordingStatus]);
+  }, [getCurrentTime, updateRecordingStatus, multiplayer]);
 
   const retryRecordingExport = useCallback(() => {
     const take = recordingTakeRef.current;
@@ -848,11 +939,15 @@ export function PlaybackMicProvider({
     const micReady = micCaptureActive && micPitchActive && micUserEnabled;
     const strictScoringAvailable = melody?.strict_scoring_available === true;
     return {
+      multiplayerPlayers,
+      multiplayerError,
       micUserEnabled,
       micMonitorUserEnabled,
       micMonitorGain,
       selectedMicId,
-      micName: selectedMicId ?? "Default",
+      micName: multiplayer
+        ? `${players.length} players · ${players[0].profile} lead`
+        : (selectedMicId ?? "Default"),
       pitchScore: micReady && strictScoringAvailable ? score : null,
       rawScore: strictScoringAvailable ? score : 0,
       series,
@@ -875,6 +970,8 @@ export function PlaybackMicProvider({
       pitchToleranceFactor: selectedPitchTolerance,
     };
   }, [
+    multiplayerPlayers,
+    multiplayerError,
     micUserEnabled,
     micMonitorUserEnabled,
     micMonitorGain,

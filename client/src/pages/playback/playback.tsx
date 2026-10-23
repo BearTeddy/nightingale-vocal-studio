@@ -13,19 +13,35 @@
 
 import { useConfig } from "@/queries/use-config";
 import type { Song } from "@/types/Song";
-import { Navigate, useLocation } from "react-router";
+import { Navigate, useLocation, useNavigate } from "react-router";
+import { useState } from "react";
+import { MultiplayerSetup } from "@/components/playback/multiplayer-setup";
+import type { MultiplayerPlayer } from "@/types/MultiplayerPlayer";
 import { PlaybackInner } from "./playback-inner";
 
 export const Playback = () => {
   const { state } = useLocation();
   const { data: config } = useConfig();
+  const navigate = useNavigate();
+  const [players, setPlayers] = useState<MultiplayerPlayer[] | null>(null);
 
-  const typedState = state as { song?: Song } | null;
+  const typedState = state as { song?: Song; multiplayer?: boolean } | null;
   const song = typedState?.song;
 
   if (!song) {
     return <Navigate to="/" replace />;
   }
 
-  return <PlaybackInner key={song.file_hash} song={song} config={config ?? null} />;
+  if (typedState?.multiplayer && !players)
+    return (
+      <MultiplayerSetup config={config ?? null} onStart={setPlayers} onBack={() => navigate("/")} />
+    );
+  return (
+    <PlaybackInner
+      key={song.file_hash}
+      song={song}
+      config={config ?? null}
+      players={typedState?.multiplayer ? (players ?? undefined) : undefined}
+    />
+  );
 };

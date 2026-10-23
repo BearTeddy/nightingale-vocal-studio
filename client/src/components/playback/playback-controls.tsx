@@ -108,7 +108,7 @@ export function PlaybackControls({ title, artist, config }: PlaybackControlsProp
     handleContinue,
     handleExit,
   } = usePlaybackTransportActions();
-  const { micMonitorUserEnabled, micMonitorGain } = usePlaybackMicState();
+  const { micMonitorUserEnabled, micMonitorGain, multiplayerPlayers } = usePlaybackMicState();
   const { handleToggleMicMonitor, setMicMonitorGain } = usePlaybackMicActions();
   const persistConfig = usePlaybackConfigPersist(config);
 
@@ -424,7 +424,12 @@ export function PlaybackControls({ title, artist, config }: PlaybackControlsProp
                       "border-cyan-300/60 bg-cyan-400/20 text-cyan-100 hover:bg-cyan-400/30",
                   )}
                   aria-label={`Karaoke voice volume ${Math.round(micMonitorGain * 100)}%`}
-                  title="Karaoke voice volume"
+                  title={
+                    multiplayerPlayers.length > 1
+                      ? "Use your audio interface's direct monitoring in multiplayer"
+                      : "Karaoke voice volume"
+                  }
+                  disabled={multiplayerPlayers.length > 1}
                 >
                   <Headphones className="size-4" />
                   <span className="hidden text-[0.65rem] sm:inline">

@@ -5,6 +5,7 @@ mod logging;
 mod lyrics;
 mod microphones;
 mod monitor;
+mod multiplayer;
 pub mod native_pitch;
 mod playback;
 mod practice;
@@ -17,7 +18,7 @@ use analyzer::{
     reanalyze_full, reanalyze_transcript, remove_song, shift_key, shift_tempo,
 };
 use app_core::{AppConfig, SongsStore};
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use cache::{calculate_cache_stats, clear_all, clear_models_command, clear_videos_command};
 use config::{load_config, save_config};
 use lyrics::{apply_timed_lyrics, load_lyrics, provide_lrc, save_lyrics, search_lrclib_lyrics};
@@ -25,6 +26,10 @@ use microphones::{
     get_latest_mic_samples, get_mic_capture_status, get_vocal_recording_status, list_microphones,
     pause_vocal_recording, resume_vocal_recording, set_monitor_enabled, set_monitor_gain,
     start_mic_capture, start_vocal_recording, stop_mic_capture, stop_vocal_recording,
+};
+use multiplayer::{
+    add_multiplayer_scores, list_multiplayer_microphones, save_multiplayer_players,
+    start_multiplayer_capture, stop_multiplayer_capture,
 };
 use playback::{
     ensure_mp3_stems, ensure_playable_source_video, fetch_pixabay_videos, get_audio_paths,
@@ -162,6 +167,11 @@ pub fn run() {
             fetch_pixabay_videos,
             get_media_endpoint,
             list_microphones,
+            list_multiplayer_microphones,
+            start_multiplayer_capture,
+            stop_multiplayer_capture,
+            save_multiplayer_players,
+            add_multiplayer_scores,
             get_mic_capture_status,
             get_latest_mic_samples,
             get_vocal_recording_status,

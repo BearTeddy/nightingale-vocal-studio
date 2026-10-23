@@ -175,7 +175,7 @@ export const ResultDialog = ({
   const recordingPreview = useRecordingPreview();
   const { retryRecordingExport, exportRecordingVideo, renderRecordingMix, setVocalGain } =
     usePlaybackMicActions();
-  const { videoExportAvailable, vocalGain } = usePlaybackMicState();
+  const { videoExportAvailable, vocalGain, multiplayerPlayers } = usePlaybackMicState();
   const strictScoringAvailable = melody?.strict_scoring_available === true;
   const difficulty = scoringDifficultyProfile(performance.scoring_difficulty);
   const board = topScoresForSong(
@@ -207,6 +207,35 @@ export const ResultDialog = ({
             <DialogTitle className="text-xl font-semibold">{song.title}</DialogTitle>
             <DialogDescription className="text-sm">{song.artist}</DialogDescription>
           </DialogHeader>
+
+          {multiplayerPlayers.length > 1 && (
+            <section aria-label="Multiplayer results" className="space-y-2">
+              <h2 className="font-semibold">Multiplayer results</h2>
+              {multiplayerPlayers
+                .slice()
+                .sort((a, b) => b.performance.overall - a.performance.overall)
+                .map((player) => (
+                  <div
+                    key={player.id}
+                    className="flex justify-between gap-3 rounded border p-3"
+                    style={{ borderColor: player.color }}
+                  >
+                    <span>{player.profile}</span>
+                    <span className="text-right tabular-nums">
+                      {player.error ||
+                      !strictScoringAvailable ||
+                      player.performance.phrases.length === 0
+                        ? "Unscored — input or melody unavailable"
+                        : `${player.performance.overall}/100 · ${player.performance.streak} combo`}
+                    </span>
+                  </div>
+                ))}
+              <p className="text-xs text-muted-foreground">
+                Same song, preset and pitch window for everyone. Valid scores are saved to each
+                singer’s profile. Details below are for {multiplayerPlayers[0].profile}.
+              </p>
+            </section>
+          )}
 
           <div className="flex flex-col items-center gap-1">
             <p

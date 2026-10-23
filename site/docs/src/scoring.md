@@ -45,3 +45,11 @@ Use **Settings → General → Mic latency** to compensate for speaker-to-microp
 ## Per-Song Scoreboards
 
 Each song maintains a scoreboard of past performances. Scores are tracked per profile, so multiple singers can compete on the same songs.
+
+## Local Multiplayer (Desktop)
+
+Select a ready song and choose **Multiplayer · 2–4 singers**. Choose a name, microphone, input channel and color for every singer. Use **Check microphones** and sing into each microphone separately to verify the corresponding meter, then **Start multiplayer**. Names become local profiles without changing your active solo profile. Assignments are remembered for next time; disconnected devices stay visible so you can reconnect or replace them.
+
+Each singer needs their own microphone or a distinct channel of a multi-input interface. Assigning the same mixed input twice is blocked. The app opens each device once and separates its channels before pitch detection. The same melody, scoring preset and pitch-catching factor apply to everyone. Each player's trace, score and combo uses their own input. Microphone failure pauses the song; return to the library and reconnect before trying again.
+
+At the end, valid scores are saved to each player's profile. Missing input is shown as unscored. Multiplayer does not currently write individual lesson-mastery history, record multitrack takes, or play voices through app monitoring. Use your interface's direct monitoring if available; the existing solo recording and monitoring controls are unchanged.

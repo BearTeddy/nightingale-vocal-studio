@@ -8,6 +8,7 @@ import type { QueuedStatus } from "@/types/QueuedStatus";
 import type { Song } from "@/types/Song";
 import { useQueryClient } from "@tanstack/react-query";
 import { PlayIcon } from "lucide-react";
+import { isTauri } from "@/bridge/runtime";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { ActionsSection } from "./details/actions-section";
@@ -51,18 +52,19 @@ export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSi
     return () => clearInterval(interval);
   }, [keyPending, queryClient]);
 
-  const handlePlay = () => {
+  const handlePlay = (multiplayer = false) => {
     const hasAdjustments = keyOffset !== song.key_offset || tempo !== song.tempo;
 
     if (!hasAdjustments) {
-      navigate("/playback", { state: { song } });
+      navigate("/playback", { state: { song, multiplayer } });
       return;
     }
 
     preparePlayback(
       { song, tempo, keyOffset },
       {
-        onSuccess: (preparedSong) => navigate("/playback", { state: { song: preparedSong } }),
+        onSuccess: (preparedSong) =>
+          navigate("/playback", { state: { song: preparedSong, multiplayer } }),
       },
     );
   };
@@ -108,7 +110,7 @@ export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSi
           className="h-8 w-full disabled:bg-primary/50 disabled:text-primary-foreground/45 disabled:opacity-100"
           disabled={!status.isReady || preparingPlayback}
           aria-busy={preparingPlayback}
-          onClick={handlePlay}
+          onClick={() => handlePlay()}
         >
           {preparingPlayback ? (
             <>
@@ -120,6 +122,16 @@ export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSi
             </>
           )}
         </Button>
+        {isTauri && (
+          <Button
+            variant="outline"
+            className="mt-2 w-full"
+            disabled={!status.isReady || preparingPlayback}
+            onClick={() => handlePlay(true)}
+          >
+            Multiplayer · 2–4 singers
+          </Button>
+        )}
       </footer>
     </aside>
   );

@@ -15,6 +15,7 @@ import {
 import { PROFILES } from "@/queries/keys";
 import { useProfiles } from "@/queries/use-profiles";
 import { addScore } from "@/bridge/profile";
+import { addMultiplayerScores } from "@/bridge/multiplayer";
 import type { ScoreRecord } from "@/types/ScoreRecord";
 import type { Song } from "@/types/Song";
 import type { PerformanceScore } from "@/types/PerformanceScore";
@@ -54,8 +55,15 @@ export function usePlaybackResult(song: Song): PlaybackResult {
 
   const { isFinished } = usePlaybackTransportState();
   const { handleExit } = usePlaybackTransportActions();
-  const { performance, performanceSeries, melody, recordingTake, recordingStatus, recordingError } =
-    usePlaybackMicState();
+  const {
+    performance,
+    performanceSeries,
+    melody,
+    recordingTake,
+    recordingStatus,
+    recordingError,
+    multiplayerPlayers,
+  } = usePlaybackMicState();
   const { skipOutroPending } = usePlaybackTranscriptState();
   const { clearSkipOutroPending } = usePlaybackTranscriptActions();
 
@@ -83,7 +91,9 @@ export function usePlaybackResult(song: Song): PlaybackResult {
 
     const finalScore = strictRawScore(melody, performance);
     const active = profileData?.active ?? null;
-    const shouldShowResult = finalScore > 0 || recordingTake != null || recordingStatus !== "off";
+    const multiplayer = multiplayerPlayers.length > 1;
+    const shouldShowResult =
+      multiplayer || finalScore > 0 || recordingTake != null || recordingStatus !== "off";
 
     if (!shouldShowResult) {
       navigate("/", { replace: true });
@@ -93,7 +103,7 @@ export function usePlaybackResult(song: Song): PlaybackResult {
     void (async () => {
       try {
         setPersonalBest(
-          active != null && finalScore > 0
+          !multiplayer && active != null && finalScore > 0
             ? personalBestForRun(
                 profileData?.scores ?? [],
                 fileHash,
@@ -104,7 +114,19 @@ export function usePlaybackResult(song: Song): PlaybackResult {
               )
             : null,
         );
-        if (active != null && finalScore > 0) {
+        if (multiplayer && melody?.strict_scoring_available) {
+          const scores = multiplayerPlayers
+            .filter((player) => !player.error && player.performance.phrases.length > 0)
+            .map((player) => ({ profile: player.profile, score: player.performance.legacy_score }));
+          if (scores.length)
+            await addMultiplayerScores(
+              fileHash,
+              scores,
+              performance.scoring_difficulty,
+              performance.pitch_tolerance_factor ?? 1,
+            );
+          await queryClient.invalidateQueries({ queryKey: PROFILES });
+        } else if (!multiplayer && active != null && finalScore > 0) {
           await addScore(
             fileHash,
             finalScore,
@@ -131,6 +153,7 @@ export function usePlaybackResult(song: Song): PlaybackResult {
     clearSkipOutroPending,
     performance,
     performanceSeries,
+    multiplayerPlayers,
     melody,
     recordingStatus,
     recordingTake,

@@ -5,6 +5,7 @@
 
 import type { AppConfig } from "@/types/AppConfig";
 import type { Song } from "@/types/Song";
+import type { MultiplayerPlayer } from "@/types/MultiplayerPlayer";
 import type { ReactNode } from "react";
 import { PlaybackMicProvider } from "./playback-mic-context";
 import { PlaybackThemeProvider } from "./playback-theme-context";
@@ -15,9 +16,10 @@ interface PlaybackProvidersProps {
   song: Song;
   config: AppConfig | null;
   children: ReactNode;
+  players?: MultiplayerPlayer[];
 }
 
-export function PlaybackProviders({ song, config, children }: PlaybackProvidersProps) {
+export function PlaybackProviders({ song, config, children, players }: PlaybackProvidersProps) {
   return (
     <PlaybackTransportProvider
       fileHash={song.file_hash}
@@ -25,6 +27,7 @@ export function PlaybackProviders({ song, config, children }: PlaybackProvidersP
     >
       <PlaybackThemeProvider song={song} config={config}>
         <PlaybackMicProvider
+          players={players}
           fileHash={song.file_hash}
           title={song.title}
           artist={song.artist}

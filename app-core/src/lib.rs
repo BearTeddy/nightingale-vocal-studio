@@ -12,6 +12,7 @@ mod lyric_readings;
 mod lyrics;
 pub mod media_server;
 mod melody;
+mod multiplayer;
 mod playback;
 mod profile;
 mod recording;
@@ -55,6 +56,10 @@ pub use lyrics::{
 pub use media_server::MediaEndpoint;
 pub use melody::{
     MelodyMap, TargetNote, load_melody_map, rebuild_melody_map, save_melody_map, verify_melody_map,
+};
+pub use multiplayer::{
+    MultiplayerPlayer, MultiplayerScore, add_multiplayer_scores, save_multiplayer_players,
+    validate_multiplayer_players,
 };
 pub use playback::{
     AudioPaths, PixabayVideoDownloaded, ShiftDone, ShiftResult, StemsReady,

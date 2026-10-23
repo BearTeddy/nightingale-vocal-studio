@@ -353,6 +353,7 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
     pitchToleranceFactor,
     recordingWanted,
     recordingStatus,
+    multiplayerPlayers,
   } = usePlaybackMicState();
   const {
     setFeedbackMode,
@@ -373,6 +374,7 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
   const hasTouch = useHasTouchInput();
   const difficultyProfile = scoringDifficultyProfile(scoringDifficulty);
   const nextDifficulty = nextScoringDifficulty(scoringDifficulty);
+  const multiplayer = multiplayerPlayers.length > 1;
 
   // Update playback text without triggering React renders every frame.
   useEffect(() => {
@@ -537,11 +539,14 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
             <button
               type="button"
               title={
-                micMonitorUserEnabled
-                  ? "Turn microphone monitoring off"
-                  : "Hear your voice with low latency (wired headphones recommended)"
+                multiplayer
+                  ? "Use your audio interface's direct monitoring in multiplayer"
+                  : micMonitorUserEnabled
+                    ? "Turn microphone monitoring off"
+                    : "Hear your voice with low latency (wired headphones recommended)"
               }
               aria-label="Microphone monitoring"
+              disabled={multiplayer}
               aria-pressed={micMonitorUserEnabled}
               onClick={handleToggleMicMonitor}
               className={`flex size-8 items-center justify-center transition-colors ${
@@ -554,7 +559,14 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
             </button>
             <button
               type="button"
-              title={recordingWanted ? "Stop vocal recording" : "Start vocal recording"}
+              title={
+                multiplayer
+                  ? "Vocal recording is available in solo mode"
+                  : recordingWanted
+                    ? "Stop vocal recording"
+                    : "Start vocal recording"
+              }
+              disabled={multiplayer}
               aria-pressed={recordingWanted}
               onClick={handleToggleRecording}
               className={`flex size-8 items-center justify-center transition-colors ${
@@ -567,14 +579,20 @@ function PlaybackHudImpl({ title, artist, config, position = "top" }: PlaybackHu
           <div
             className={`text-base md:text-lg ${micReady && melody?.strict_scoring_available ? "text-white" : "text-white/50"}`}
           >
-            Score:{" "}
+            {multiplayer ? `${multiplayerPlayers[0].profile}:` : "Score:"}{" "}
             {micReady && melody?.strict_scoring_available
               ? performance.overall
               : (pitchScore ?? "--")}
           </div>
           <div className="flex items-center gap-1 text-xs text-white/55">
             {recordingWanted && <Circle className="size-2 fill-red-500 text-red-500" />}
-            <span>{recordingStatus === "off" ? "Recording off" : recordingStatus}</span>
+            <span>
+              {multiplayer
+                ? `${multiplayerPlayers.length} singers · individual scores`
+                : recordingStatus === "off"
+                  ? "Recording off"
+                  : recordingStatus}
+            </span>
           </div>
           <div className="hidden sm:block">
             <SettingsInfo

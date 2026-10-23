@@ -499,7 +499,7 @@ fn recording_completion_error(overrun: bool, device_lost: bool) -> Option<&'stat
     }
 }
 
-fn find_device(preferred: Option<&str>) -> Result<(cpal::Device, String), String> {
+pub(crate) fn find_device(preferred: Option<&str>) -> Result<(cpal::Device, String), String> {
     let host = cpal::default_host();
 
     if let Some(name) = preferred {

@@ -23,10 +23,13 @@ import {
 import { usePlaybackInput, usePlaybackResult } from "@/hooks/playback";
 import type { AppConfig } from "@/types/AppConfig";
 import type { Song } from "@/types/Song";
+import type { MultiplayerPlayer } from "@/types/MultiplayerPlayer";
+import { useEffect } from "react";
 
 export interface PlaybackInnerProps {
   song: Song;
   config: AppConfig | null;
+  players?: MultiplayerPlayer[];
 }
 
 interface PlaybackLayoutProps {
@@ -36,9 +39,12 @@ interface PlaybackLayoutProps {
 
 function PlaybackLayout({ song, config }: PlaybackLayoutProps) {
   const { isReady, paused } = usePlaybackTransportState();
-  const { handleContinue } = usePlaybackTransportActions();
+  const { handleContinue, handlePause, handleExit } = usePlaybackTransportActions();
   const { segments } = usePlaybackTranscriptState();
-  const { series } = usePlaybackMicState();
+  const { series, multiplayerError } = usePlaybackMicState();
+  useEffect(() => {
+    if (multiplayerError && !paused) handlePause();
+  }, [multiplayerError, paused, handlePause]);
   const lyricsVerticalPosition = config?.lyrics_vertical_position ?? "bottom";
   const lyricsHorizontalPosition = config?.lyrics_horizontal_position ?? "center";
   const hudPosition = lyricsVerticalPosition === "top" ? "bottom" : "top";
@@ -71,6 +77,21 @@ function PlaybackLayout({ song, config }: PlaybackLayoutProps) {
       )}
 
       <PauseOverlay open={paused && !result.open} onContinue={handleContinue} />
+      {multiplayerError && !result.open && (
+        <div
+          role="alert"
+          className="fixed inset-x-4 top-20 z-50 mx-auto max-w-lg rounded border border-red-500 bg-black/95 p-4 text-white"
+        >
+          <p>Multiplayer input stopped: {multiplayerError}</p>
+          <button
+            type="button"
+            className="mt-3 rounded bg-white px-3 py-2 text-black"
+            onClick={handleExit}
+          >
+            Back to library to reconnect microphones
+          </button>
+        </div>
+      )}
 
       <ResultDialog
         open={result.open}
@@ -91,9 +112,9 @@ function PlaybackLayout({ song, config }: PlaybackLayoutProps) {
   );
 }
 
-export function PlaybackInner({ song, config }: PlaybackInnerProps) {
+export function PlaybackInner({ song, config, players }: PlaybackInnerProps) {
   return (
-    <PlaybackProviders song={song} config={config}>
+    <PlaybackProviders song={song} config={config} players={players}>
       <PlaybackLayout song={song} config={config} />
     </PlaybackProviders>
   );
